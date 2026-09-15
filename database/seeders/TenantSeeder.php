@@ -16,7 +16,7 @@ class TenantSeeder extends Seeder
             ['slug' => 'proagro'],
             [
                 'name' => 'Proagroindustria S.A. de C.V.',
-                'domain' => 'pro-agroindustria.com',
+                'domain' => 'pro-agroindustria.online',
                 'logo' => '/images/logo_proagro.png',
                 'favicon' => '/Proagro.png',
                 'primary_color' => '#1e1b4b',

@@ -39,7 +39,7 @@ class TenantMiddleware
                     'logo' => '/images/Proagro2.png',
                     'primary_color' => '#16a34a',
                     'secondary_color' => '#f0fdf4',
-                    'domain' => 'pro-agroindustria.com'
+                    'domain' => 'pro-agroindustria.online'
                 ],
                 'vecode' => [
                     'name' => 'VECODE LOGISTICS',

@@ -235,7 +235,7 @@ export default function Print({ order }: { order: Order }) {
                     </div>
 
                     <div className="mb-4 font-bold" style={{ color: tenant?.primary_color || '#15803d' }}>
-                        {!tenant || tenant?.slug === 'proagro' ? 'www.pro-agroindustria.com' : (tenant?.domain || 'VECODE.COM')}
+                        {!tenant || tenant?.slug === 'proagro' ? 'pro-agroindustria.online' : (tenant?.domain || 'VECODE.COM')}
                     </div>
 
                     <div className="text-xs text-gray-700 flex justify-between items-end">
