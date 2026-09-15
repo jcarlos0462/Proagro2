@@ -53,11 +53,11 @@ export default function QrPrint({ auth }: { auth: any }) {
             <div className="max-w-4xl mx-auto print:hidden">
                 <div className="mb-6 flex items-center justify-between">
                     <Link
-                        href={route("apt.index")}
+                        href={new URLSearchParams(window.location.search).get("from") === "production" ? route("apt.production") : route("apt.index")}
                         className="text-gray-500 hover:text-gray-900 flex items-center text-sm font-medium"
                     >
                         <ArrowLeft className="w-4 h-4 mr-1" />
-                        Volver a APT
+                        {new URLSearchParams(window.location.search).get("from") === "production" ? "Volver al menú de submódulos" : "Volver a APT"}
                     </Link>
                 </div>
 

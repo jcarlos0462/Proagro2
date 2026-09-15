@@ -256,16 +256,32 @@ export default function Index({
                             <div className="bg-indigo-50 p-2 rounded-lg ml-1">
                                 <Calendar className="w-4 h-4 text-indigo-600" />
                             </div>
+                            <span className="px-3 text-sm font-bold text-gray-700 pointer-events-none">
+                                {historicalDate
+                                    ? historicalDate.split("-").reverse().join("/")
+                                    : "dd/mm/aaaa"}
+                            </span>
                             <input
                                 type="date"
                                 value={historicalDate}
                                 onChange={(e) => setHistoricalDate(e.target.value)}
-                                className="w-full border-none text-sm font-bold text-gray-700 focus:ring-0 bg-transparent"
+                                onClick={(event) => {
+                                    const input = event.currentTarget as HTMLInputElement & { showPicker?: () => void };
+                                    if (input.showPicker) {
+                                        event.preventDefault();
+                                        input.showPicker();
+                                    }
+                                }}
+                                aria-label="Seleccionar fecha histórica"
+                                className="absolute inset-0 z-10 h-full w-full opacity-0 cursor-pointer"
                             />
                             {historicalDate && (
                                 <button 
-                                    onClick={() => setHistoricalDate("")}
-                                    className="p-1 hover:bg-gray-100 rounded-full mr-1"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setHistoricalDate("");
+                                    }}
+                                    className="relative z-20 p-1 hover:bg-gray-100 rounded-full mr-1"
                                     title="Limpiar filtro histórico"
                                 >
                                     <X className="w-4 h-4 text-gray-400" />

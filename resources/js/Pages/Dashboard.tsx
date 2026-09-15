@@ -540,7 +540,7 @@ export default function Dashboard({
                                             }
                                             showAnimation={true}
                                             showLegend={false}
-                                            yAxisWidth={50}
+                                            yAxisWidth={80}
                                             onValueChange={(v: any) =>
                                                 handleBarClick(v)
                                             }

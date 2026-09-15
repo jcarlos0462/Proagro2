@@ -47,11 +47,11 @@ export default function RegisterOperator({
             <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="mb-6">
                     <Link
-                        href={route("apt.index")}
+                        href={new URLSearchParams(window.location.search).get("from") === "production" ? route("apt.production") : route("apt.index")}
                         className="text-gray-500 hover:text-gray-900 flex items-center text-sm font-medium"
                     >
                         <ArrowLeft className="w-4 h-4 mr-1" />
-                        Volver al menú APT
+                        {new URLSearchParams(window.location.search).get("from") === "production" ? "Volver al menú de submódulos" : "Volver al menú APT"}
                     </Link>
                 </div>
 

@@ -14,6 +14,9 @@ import {
     User as UserIcon,
     Scale,
     Calendar,
+    Camera,
+    Save,
+    Check,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -246,22 +249,67 @@ export default function Status({
     filters,
 }: {
     auth: any;
-    warehouses: any[];
-    filters: any;
+    warehouses?: any[];
+    filters?: any;
 }) {
     const [viewingLocation, setViewingLocation] = useState<any>(null);
+    const productionMode = filters?.from === "production" || new URLSearchParams(window.location.search).get("from") === "production";
+    const [assignedUser, setAssignedUser] = useState("");
+    const [shift, setShift] = useState("");
+    const [receptionLot, setReceptionLot] = useState("");
+    const [evidence, setEvidence] = useState<string | null>(null);
+    const [savedShift, setSavedShift] = useState<any>(() => {
+        try {
+            return JSON.parse(localStorage.getItem("apt-production-shift") || "null");
+        } catch {
+            return null;
+        }
+    });
     const [date, setDate] = useState(
-        filters.date || new Date().toISOString().split("T")[0],
+        filters?.date || new Date().toISOString().split("T")[0],
     );
 
-    const flatWarehouses = warehouses.filter((w) => w.type === "flat");
-    const cubicledWarehouses = warehouses.filter((w) => w.type === "cubicles");
+    const today = new Date().toISOString().split("T")[0];
+
+    const handleEvidenceChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = () => setEvidence(reader.result as string);
+        reader.readAsDataURL(file);
+    };
+
+    const handleShiftSave = (event: React.FormEvent) => {
+        event.preventDefault();
+        if (!assignedUser || !shift || !receptionLot) return;
+
+        const registration = {
+            assignedUser,
+            position: "Automático",
+            date: today,
+            shift,
+            receptionLot,
+            evidence,
+            savedAt: new Date().toISOString(),
+        };
+        localStorage.setItem("apt-production-shift", JSON.stringify(registration));
+        setSavedShift(registration);
+    };
+
+    const flatWarehouses = (warehouses || []).filter((w) => w.type === "flat");
+    const cubicledWarehouses = (warehouses || []).filter((w) => w.type === "cubicles");
 
     const handleDateChange = (newDate: string) => {
         setDate(newDate);
         router.get(
             route("apt.status"),
-            { date: newDate },
+            {
+                date: newDate,
+                ...(new URLSearchParams(window.location.search).get("from") === "production"
+                    ? { from: "production" }
+                    : {}),
+            },
             {
                 preserveState: true,
                 replace: true,
@@ -274,17 +322,83 @@ export default function Status({
         <DashboardLayout user={auth.user} header="Status APT">
             <Head title="Status APT" />
 
-            <div className="max-w-7xl mx-auto py-8 px-4 space-y-8 animate-fade-in">
+            <div className={`max-w-7xl mx-auto py-8 px-4 space-y-8 animate-fade-in ${productionMode ? "production-only" : ""}`}>
+                <section className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-slate-50 to-white border border-slate-200 shadow-xl">
+                    <div className="flex flex-col gap-3 border-b border-slate-200 bg-gradient-to-r from-sky-700 to-blue-800 px-6 py-5 text-white sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <p className="text-xs font-black uppercase tracking-[0.25em] text-sky-100">Gestión de la producción</p>
+                            <h2 className="mt-1 text-2xl font-black">Registro de inicio de turno</h2>
+                        </div>
+                        {savedShift && <span className="inline-flex items-center gap-2 self-start rounded-full bg-emerald-400/20 px-3 py-1 text-xs font-bold text-emerald-100 sm:self-auto"><Check className="h-4 w-4" /> Guardado</span>}
+                    </div>
+
+                    <form onSubmit={handleShiftSave} className="grid gap-6 p-6 lg:grid-cols-[1fr_1fr_0.9fr]">
+                        <div className="space-y-5">
+                            <div>
+                                <label className="mb-2 block text-sm font-black uppercase tracking-wide text-sky-700">Usuario asignado</label>
+                                <select value={assignedUser} onChange={(event) => setAssignedUser(event.target.value)} className="w-full rounded-xl border-sky-200 bg-white px-4 py-3 font-semibold text-slate-700 shadow-sm focus:border-sky-500 focus:ring-sky-500" required>
+                                    <option value="">Seleccionar</option>
+                                    <option value={auth.user?.name || "Usuario actual"}>{auth.user?.name || "Usuario actual"}</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="mb-2 block text-sm font-black uppercase tracking-wide text-sky-700">Turno</label>
+                                <select value={shift} onChange={(event) => setShift(event.target.value)} className="w-full rounded-xl border-sky-200 bg-white px-4 py-3 font-semibold text-slate-700 shadow-sm focus:border-sky-500 focus:ring-sky-500" required>
+                                    <option value="">Seleccionar</option>
+                                    <option value="Turno 1">Turno 1</option>
+                                    <option value="Turno 2">Turno 2</option>
+                                    <option value="Turno 3">Turno 3</option>
+                                    <option value="Turno 1A">Turno 1A</option>
+                                    <option value="Turno 1B">Turno 1B</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="space-y-5">
+                            <div>
+                                <label className="mb-2 block text-sm font-black uppercase tracking-wide text-sky-700">Puesto</label>
+                                <input value="Automático" readOnly className="w-full rounded-xl border-sky-200 bg-slate-50 px-4 py-3 font-semibold text-slate-500 shadow-sm" />
+                            </div>
+                            <div>
+                                <label className="mb-2 block text-sm font-black uppercase tracking-wide text-sky-700">Lote en recepción</label>
+                                <select value={receptionLot} onChange={(event) => setReceptionLot(event.target.value)} className="w-full rounded-xl border-sky-200 bg-white px-4 py-3 font-semibold text-slate-700 shadow-sm focus:border-sky-500 focus:ring-sky-500" required>
+                                    <option value="">Seleccionar</option>
+                                    <option value="Lote 1">Lote 1</option>
+                                    <option value="Lote 2">Lote 2</option>
+                                    <option value="Lote 3">Lote 3</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col justify-between gap-5">
+                            <div>
+                                <label className="mb-2 block text-sm font-black uppercase tracking-wide text-sky-700">Fecha</label>
+                                <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-slate-50 px-4 py-3 font-semibold text-slate-500"><Calendar className="h-5 w-5 text-sky-600" />{new Date(today + "T00:00:00").toLocaleDateString("es-MX")}</div>
+                            </div>
+                            <label className="flex cursor-pointer items-center justify-center gap-3 rounded-xl border-2 border-dashed border-slate-300 px-4 py-4 text-sm font-bold text-slate-600 transition hover:border-sky-500 hover:bg-sky-50">
+                                {evidence ? <img src={evidence} alt="Evidencia seleccionada" className="h-12 w-12 rounded-lg object-cover" /> : <Camera className="h-7 w-7 text-sky-600" />}
+                                <span>{evidence ? "Cambiar evidencia" : "Evidencia fotográfica"}</span>
+                                <input type="file" accept="image/*" capture="environment" onChange={handleEvidenceChange} className="hidden" />
+                            </label>
+                            <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 py-3 font-black text-white shadow-lg transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50" disabled={!assignedUser || !shift || !receptionLot}>
+                                <Save className="h-5 w-5" /> Guardar
+                            </button>
+                        </div>
+                    </form>
+                </section>
+
+                <style>{productionMode ? `.production-only > :not(:first-child) { display: none; }` : ""}</style>
+
                 {/* Header Section */}
                 <div className="flex flex-col md:flex-row items-center justify-between gap-4">
                     <div>
                         <div className="mb-4">
                             <Link
-                                href={route("apt.index")}
+                                href={new URLSearchParams(window.location.search).get("from") === "production" ? route("apt.production") : route("apt.index")}
                                 className="text-gray-500 hover:text-gray-900 flex items-center text-sm font-medium transition-colors"
                             >
                                 <ArrowLeft className="w-4 h-4 mr-1" />
-                                Volver al menú
+                                {new URLSearchParams(window.location.search).get("from") === "production" ? "Volver al menú de submódulos" : "Volver al menú"}
                             </Link>
                         </div>
                         <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">

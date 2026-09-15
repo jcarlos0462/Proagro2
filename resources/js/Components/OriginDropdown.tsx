@@ -19,14 +19,15 @@ interface Origin {
 
 interface OriginDropdownProps {
     value?: number | string;
+    initialOrigins?: Origin[];
     onChange: (id: number) => void;
     onSelect?: (origin: Origin) => void;
     label?: string;
     error?: string;
 }
 
-export default function OriginDropdown({ value, onChange, onSelect, label = "Origen", error }: OriginDropdownProps) {
-    const [origins, setOrigins] = useState<Origin[]>([]);
+export default function OriginDropdown({ value, initialOrigins = [], onChange, onSelect, label = "Origen", error }: OriginDropdownProps) {
+    const [origins, setOrigins] = useState<Origin[]>(initialOrigins);
     const [loading, setLoading] = useState(false);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingOrigin, setEditingOrigin] = useState<Origin | null>(null);
@@ -36,15 +37,9 @@ export default function OriginDropdown({ value, onChange, onSelect, label = "Ori
     const fetchOrigins = async () => {
         setLoading(true);
         try {
-            const response = await axios.get('/shipment-origins');
-            setOrigins(response.data);
-
-            // If we have a string value (legacy), try to find the matching ID and update parent
-            if (typeof value === 'string' && value && response.data.length > 0) {
-                const matched = response.data.find((o: Origin) => o.name === value);
-                if (matched) {
-                    onChange(matched.id);
-                }
+            const response = await axios.get(route('shipment-origins.index'));
+            if (Array.isArray(response.data)) {
+                setOrigins(response.data);
             }
         } catch (error) {
             console.error("Error fetching origins:", error);
@@ -57,20 +52,39 @@ export default function OriginDropdown({ value, onChange, onSelect, label = "Ori
         fetchOrigins();
     }, []);
 
+    useEffect(() => {
+        if (initialOrigins && initialOrigins.length > 0) {
+            setOrigins(initialOrigins);
+        }
+    }, [initialOrigins]);
+
     const handleSave = async () => {
         if (!newName.trim()) return;
         setIsSaving(true);
         try {
+            let savedId: number | null = null;
+            let savedOrigin: Origin | null = null;
+
             if (editingOrigin) {
-                await axios.put(`/shipment-origins/${editingOrigin.id}`, { name: newName });
+                const resp = await axios.put(route('shipment-origins.update', editingOrigin.id), { name: newName.trim() });
+                savedId = resp.data?.id;
+                savedOrigin = resp.data;
             } else {
-                const resp = await axios.post('/shipment-origins', { name: newName });
-                if (!value) onChange(resp.data.id); // Auto-select if nothing selected
+                const resp = await axios.post(route('shipment-origins.store'), { name: newName.trim() });
+                savedId = resp.data?.id;
+                savedOrigin = resp.data;
             }
             await fetchOrigins();
+            if (savedId) {
+                onChange(savedId);
+                if (onSelect && savedOrigin) {
+                    onSelect(savedOrigin);
+                }
+            }
             closeDialog();
         } catch (error: any) {
-            alert(error.response?.data?.message || "Error al guardar origen");
+            const errorMsg = error.response?.data?.errors?.name?.[0] || error.response?.data?.message || "Error al guardar origen";
+            alert(errorMsg);
         } finally {
             setIsSaving(false);
         }
@@ -80,9 +94,8 @@ export default function OriginDropdown({ value, onChange, onSelect, label = "Ori
         e.stopPropagation();
         if (!confirm(`¿Estás seguro de eliminar "${origin.name}"?`)) return;
         try {
-            await axios.delete(`/shipment-origins/${origin.id}`);
+            await axios.delete(route('shipment-origins.destroy', origin.id));
             if (Number(value) === origin.id) {
-                // Find another or clear
                 const firstOther = origins.find(o => o.id !== origin.id);
                 if (firstOther) onChange(firstOther.id);
             }
@@ -154,7 +167,7 @@ export default function OriginDropdown({ value, onChange, onSelect, label = "Ori
                                 </button>
                             </div>
 
-                            {loading ? (
+                            {loading && origins.length === 0 ? (
                                 <div className="px-4 py-2 text-gray-400 italic">Cargando...</div>
                             ) : (
                                 origins.map((origin) => (

@@ -64,9 +64,10 @@ export default function Index({ auth, lots, filters }: PageProps) {
 
     const handleSearch = (newSearch?: string) => {
         const s = newSearch !== undefined ? newSearch : search;
+        const from = new URLSearchParams(window.location.search).get("from");
         router.get(
             route("apt.lots.index"),
-            pickBy({ search: s }),
+            pickBy({ search: s, from }),
             { preserveState: true },
         );
     };
@@ -141,11 +142,11 @@ export default function Index({ auth, lots, filters }: PageProps) {
                     <div className="flex-1 min-w-0">
                         <div className="mb-4">
                             <Link
-                                href={route("apt.index")}
+                                href={new URLSearchParams(window.location.search).get("from") === "production" ? route("apt.production") : route("apt.index")}
                                 className="text-gray-500 hover:text-gray-900 flex items-center text-sm font-medium transition-colors"
                             >
                                 <ArrowLeft className="w-4 h-4 mr-1" />
-                                Volver a APT
+                                {new URLSearchParams(window.location.search).get("from") === "production" ? "Volver al menú de submódulos" : "Volver a APT"}
                             </Link>
                         </div>
                         <h2 className="text-2xl font-bold leading-7 text-indigo-900 sm:text-3xl sm:truncate flex items-center">
@@ -155,7 +156,7 @@ export default function Index({ auth, lots, filters }: PageProps) {
                     </div>
                     <div className="mt-4 flex md:mt-0 md:ml-4">
                         <Link
-                            href={route("apt.lots.create")}
+                            href={`${route("apt.lots.create")}${new URLSearchParams(window.location.search).get("from") === "production" ? "?from=production" : ""}`}
                             className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-md text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-all transform hover:-translate-y-0.5"
                         >
                             <Plus className="w-5 h-5 mr-2" />
@@ -263,7 +264,7 @@ export default function Index({ auth, lots, filters }: PageProps) {
 
                                                     {/* Edit */}
                                                     <Link
-                                                        href={route("apt.lots.edit", lot.id)}
+                                                        href={`${route("apt.lots.edit", lot.id)}${new URLSearchParams(window.location.search).get("from") === "production" ? "?from=production" : ""}`}
                                                         className="inline-flex items-center text-indigo-600 hover:text-indigo-900 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 hover:border-indigo-300 transition-all font-bold"
                                                         title="Editar Lote"
                                                     >

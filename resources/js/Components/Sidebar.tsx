@@ -50,7 +50,7 @@ export function Sidebar({ className, isMobile = false }: SidebarProps) {
                         <img
                             src={props.tenant?.logo || `/images/logovecode.png`}
                             alt={props.tenant?.name || "Logo"}
-                            className="h-12 w-auto object-contain drop-shadow-2xl transition-all duration-300 group-hover:h-20"
+                            className="h-12 w-auto object-contain drop-shadow-2xl transition-all duration-300"
                             onError={(e) => {
                                 e.currentTarget.src = "/images/logovecode.png";
                             }}
@@ -126,7 +126,7 @@ export function Sidebar({ className, isMobile = false }: SidebarProps) {
                         )}>
                             <p className="text-sm font-bold text-white truncate">{user?.name}</p>
                             <p className="text-[10px] text-slate-400 truncate uppercase tracking-wider">
-                                {roles[0] || 'Operador'} • <span className="text-emerald-400">Online</span>
+                                {roles[0] || 'Operador'} • <span className="text-emerald-400 font-semibold">ONLINE</span>
                             </p>
                         </div>
                     </div>

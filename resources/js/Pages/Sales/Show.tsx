@@ -278,7 +278,7 @@ export default function Show({
 
                             <div className="text-center mb-8 print:mb-4">
                                 <p className="font-bold text-[13px]" style={{ color: tenant?.primary_color || '#312e81' }}>
-                                    {tenant?.slug === 'proagro' ? 'pro-agroindustria.online' : (tenant?.domain || 'VECODE.COM')}
+                                    {tenant?.slug === 'proagro' ? 'www.pro-agroindustria.com' : (tenant?.domain || 'VECODE.COM')}
                                 </p>
                             </div>
 

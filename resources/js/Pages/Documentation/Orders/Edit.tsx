@@ -52,6 +52,8 @@ export default function Edit({
     clients,
     products,
     sales_orders,
+    origins,
+    destinations,
     scale_operators,
     queryParams,
 }: {
@@ -60,6 +62,8 @@ export default function Edit({
     clients: Client[];
     products: Product[];
     sales_orders: any[];
+    origins?: { id: number; name: string }[];
+    destinations?: { id: number; name: string }[];
     scale_operators?: { id: number; name: string }[];
     queryParams?: any;
 }) {
@@ -773,6 +777,7 @@ export default function Edit({
 
                             <OriginDropdown
                                 value={data.origin_id}
+                                initialOrigins={origins}
                                 onChange={(id) => setData("origin_id", id)}
                                 error={errors.origin_id}
                             />
@@ -812,6 +817,7 @@ export default function Edit({
 
                             <DestinationDropdown
                                 value={data.destination_id}
+                                initialDestinations={destinations}
                                 onChange={(id) => setData("destination_id", id)}
                                 error={errors.destination_id}
                             />

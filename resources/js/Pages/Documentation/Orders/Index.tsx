@@ -127,6 +127,7 @@ export default function Index({
     const [search, setSearch] = useState(filters.search || "");
     const [status, setStatus] = useState(filters.status || "active"); // Default to active if not present
     const [showAlert, setShowAlert] = useState(!!flash?.success);
+    const fromProduction = new URLSearchParams(window.location.search).get("from") === "production";
 
     useEffect(() => {
         if (flash?.success) {
@@ -142,7 +143,7 @@ export default function Index({
 
         router.get(
             route("documentation.orders.index"),
-            pickBy({ search: s, status: st }),
+            pickBy({ search: s, status: st, ...(fromProduction ? { from: "production", module: "apt" } : {}) }),
             { preserveState: true },
         );
     };
@@ -154,8 +155,8 @@ export default function Index({
     };
 
     return (
-        <DashboardLayout user={auth.user} header="Órdenes de Embarque">
-            <Head title="Órdenes de Embarque" />
+        <DashboardLayout user={auth.user} header={fromProduction ? "Historial de órdenes de embarque" : "Órdenes de Embarque"}>
+            <Head title={fromProduction ? "Historial de órdenes de embarque" : "Órdenes de Embarque"} />
 
             <div className="py-8 max-w-[98%] mx-auto px-4 sm:px-6 lg:px-8 relative">
                 {/* Dynamic Alert */}
@@ -183,17 +184,17 @@ export default function Index({
                 <div className="md:flex md:items-center md:justify-between mb-6">
                     <div className="flex-1 min-w-0">
                         <div className="mb-4">
-                            <Link
-                                href={auth.user.roles?.includes('Bascula') && !auth.user.roles?.includes('Admin') ? route('scale.index') : route("documentation.index")}
+                                <Link
+                                href={fromProduction ? route("apt.production") : auth.user.roles?.includes('Bascula') && !auth.user.roles?.includes('Admin') ? route('scale.index') : route("documentation.index")}
                                 className="text-gray-500 hover:text-gray-900 flex items-center text-sm font-medium transition-colors"
                             >
                                 <ArrowLeft className="w-4 h-4 mr-1" />
-                                {auth.user.roles?.includes('Bascula') && !auth.user.roles?.includes('Admin') ? "Volver a Báscula" : "Volver a Documentación"}
+                                {fromProduction ? "Volver a Gestión de almacenes" : auth.user.roles?.includes('Bascula') && !auth.user.roles?.includes('Admin') ? "Volver a Báscula" : "Volver a Documentación"}
                             </Link>
                         </div>
                         <h2 className="text-2xl font-bold leading-7 text-indigo-900 sm:text-3xl sm:truncate flex items-center">
                             <FileText className="mr-3 h-8 w-8 text-indigo-600" />
-                            Órdenes de Embarque
+                            {fromProduction ? "Historial de órdenes de embarque" : "Órdenes de Embarque"}
                         </h2>
                     </div>
                     <div className="mt-4 flex flex-col sm:flex-row gap-2 md:mt-0 md:ml-4">

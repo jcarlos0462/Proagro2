@@ -20,6 +20,7 @@ import {
 import { FormEventHandler, useState, Fragment, useEffect } from "react";
 import { Combobox, Transition } from "@headlessui/react";
 import axios from "axios";
+import Swal from "sweetalert2";
 import QrScannerModal from "@/Components/QrScannerModal";
 import OriginDropdown from "@/Components/OriginDropdown";
 import DestinationDropdown from "@/Components/DestinationDropdown";
@@ -61,12 +62,20 @@ interface Operator {
     economic_number: string;
     license: string;
     brand_model: string;
+    access_denied?: boolean;
+}
+
+interface CatalogOption {
+    id: number;
+    name: string;
 }
 
 export default function Create({
     auth,
     clients,
     products,
+    origins,
+    destinations,
     sales_orders,
     default_folio,
     scale_operators,
@@ -74,6 +83,8 @@ export default function Create({
     auth: any;
     clients: Client[];
     products: Product[];
+    origins: CatalogOption[];
+    destinations: CatalogOption[];
     sales_orders: SalesOrder[];
     default_folio: string;
     scale_operators?: { id: number; name: string }[];
@@ -170,7 +181,22 @@ export default function Create({
                 op.id.toString() === cleanText
             );
 
-            if (exactMatch) {
+            const selectedOperator = exactMatch || operators[0];
+
+            if (selectedOperator?.access_denied) {
+                Swal.fire({
+                    icon: "warning",
+                    title: "Acceso denegado",
+                    text: "Este usuario fue rechazado por vigilancia.",
+                    confirmButtonText: "Entendido",
+                    confirmButtonColor: "#4338ca",
+                    background: "#ffffff",
+                    color: "#172554",
+                    backdrop: "rgba(15, 23, 42, 0.45)",
+                });
+                setShowQrScanner(false);
+                setQrInput("");
+            } else if (exactMatch) {
                 handleOperatorSelect(exactMatch);
                 setShowQrScanner(false);
                 setQrInput(""); // Clear input after successful scan
@@ -846,6 +872,7 @@ export default function Create({
 
                             <OriginDropdown
                                 value={data.origin_id}
+                                initialOrigins={origins}
                                 onChange={(id) => setData("origin_id", id)}
                                 error={errors.origin_id}
                             />
@@ -885,6 +912,7 @@ export default function Create({
 
                             <DestinationDropdown
                                 value={data.destination_id}
+                                initialDestinations={destinations}
                                 onChange={(id) => setData("destination_id", id)}
                                 error={errors.destination_id}
                             />

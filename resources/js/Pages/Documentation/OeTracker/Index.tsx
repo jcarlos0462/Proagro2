@@ -8,7 +8,6 @@ import {
     Hourglass,
     Package,
     Warehouse,
-    Calendar,
     Printer,
     RefreshCw,
     X,
@@ -16,6 +15,13 @@ import {
 import { useState, useEffect, useRef } from "react";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
+
+interface ProcessStatus {
+    stage: 'pending_entry' | 'in_plant' | 'loading' | 'loaded' | 'completed';
+    label: string;
+    detail: string;
+    color: 'red' | 'amber' | 'indigo' | 'blue' | 'emerald';
+}
 
 interface OeRow {
     id: string;
@@ -31,11 +37,12 @@ interface OeRow {
     presentation: string;
     programmed_tons: number;
     is_pending: boolean;
-    created_at: string;       // ISO8601
-    completed_at: string | null; // ISO8601 or null
+    created_at: string;          // ISO8601
+    completed_at: string | null;    // ISO8601 or null
     status: string;
     ticket_status: 'checkmark' | 'x' | null;
     in_plant: boolean;
+    process_status?: ProcessStatus;
 }
 
 interface PageProps {
@@ -48,12 +55,13 @@ interface PageProps {
     filters: {
         search: string;
         module?: string;
+        from?: string;
         in_plant: string;
         client_id?: string;
         product_id?: string;
     };
-    clients: { id: number; business_name: string; name: string }[];
-    products: { id: number; name: string }[];
+    clients?: { id: number; business_name: string; name: string }[];
+    products?: { id: number; name: string }[];
     envasadoClients: { id: number; business_name: string; name: string }[];
     envasadoProducts: { id: number; name: string }[];
     granelClients: { id: number; business_name: string; name: string }[];
@@ -85,7 +93,6 @@ function TimerCell({ row }: { row: OeRow }) {
 
     useEffect(() => {
         if (row.is_pending) {
-            // Live counter from created_at
             const startMs = new Date(row.created_at).getTime();
             const tick = () => {
                 const secs = Math.floor((Date.now() - startMs) / 1000);
@@ -94,7 +101,6 @@ function TimerCell({ row }: { row: OeRow }) {
             tick();
             intervalRef.current = setInterval(tick, 1000);
         } else {
-            // Fixed duration
             if (row.completed_at) {
                 const startMs = new Date(row.created_at).getTime();
                 const endMs = new Date(row.completed_at).getTime();
@@ -110,15 +116,16 @@ function TimerCell({ row }: { row: OeRow }) {
 
     return (
         <span
-            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-mono font-bold ${isPending
-                ? "bg-amber-100 text-amber-800"
-                : "bg-emerald-100 text-emerald-800"
-                }`}
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-mono font-bold whitespace-nowrap ${
+                isPending
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-emerald-100 text-emerald-800"
+            }`}
         >
             {isPending ? (
-                <Hourglass className="w-3 h-3 flex-shrink-0" />
+                <Hourglass className="w-2.5 h-2.5 flex-shrink-0" />
             ) : (
-                <CheckCircle2 className="w-3 h-3 flex-shrink-0" />
+                <CheckCircle2 className="w-2.5 h-2.5 flex-shrink-0" />
             )}
             {formatDuration(elapsed)}
         </span>
@@ -128,23 +135,44 @@ function TimerCell({ row }: { row: OeRow }) {
 // ─── Status Badge ─────────────────────────────────────────────────────────────
 
 function StatusBadge({ row }: { row: OeRow }) {
-    if (!row.is_pending) {
+    const ps = row.process_status;
+
+    if (ps) {
+        const colorClasses: Record<string, string> = {
+            red: "bg-red-50 text-red-700 border-red-200",
+            amber: "bg-amber-50 text-amber-800 border-amber-200",
+            indigo: "bg-indigo-50 text-indigo-700 border-indigo-200",
+            blue: "bg-blue-50 text-blue-700 border-blue-200",
+            emerald: "bg-emerald-50 text-emerald-800 border-emerald-200",
+        };
+        const cls = colorClasses[ps.color] || "bg-gray-100 text-gray-700 border-gray-200";
+
         return (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                COMPLETADA
+            <span
+                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${cls} whitespace-nowrap`}
+                title={ps.detail}
+            >
+                {ps.label}
             </span>
         );
     }
 
-    // "En Planta" logic: true if backend says in_plant
-    const label = row.in_plant ? "SÍ" : "NO";
+    if (!row.is_pending) {
+        return (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+                Destarado
+            </span>
+        );
+    }
+
+    const label = row.in_plant ? "En Planta (Espera)" : "Por Ingresar";
     const cls = row.in_plant
-        ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-        : "bg-red-100 text-red-800 border border-red-200";
+        ? "bg-amber-50 text-amber-800 border-amber-200"
+        : "bg-red-50 text-red-700 border-red-200";
 
     return (
         <span
-            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${cls}`}
+            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${cls} whitespace-nowrap`}
         >
             {label}
         </span>
@@ -172,74 +200,75 @@ function OeTable({
     }
 
     return (
-        <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-100 text-sm">
+        <div className="w-full overflow-hidden">
+            <table className="w-full table-auto divide-y divide-gray-100 text-xs">
                 <thead className="bg-gradient-to-r from-indigo-800 to-indigo-900 text-white">
                     <tr>
-                        <th className="px-4 py-3 text-center font-bold uppercase tracking-wider text-xs w-10">Ticket</th>
-                        <th className="px-4 py-3 text-center font-bold uppercase tracking-wider text-xs w-12">#</th>
-                        <th className="px-4 py-3 text-left font-bold uppercase tracking-wider text-xs">OE</th>
-                        <th className="px-4 py-3 text-left font-bold uppercase tracking-wider text-xs">Placa Tracto</th>
-                        <th className="px-4 py-3 text-left font-bold uppercase tracking-wider text-xs">Operador</th>
-                        <th className="px-4 py-3 text-left font-bold uppercase tracking-wider text-xs">Tipo Unidad</th>
-                        <th className="px-4 py-3 text-left font-bold uppercase tracking-wider text-xs">Línea Transp.</th>
-                        <th className="px-4 py-3 text-left font-bold uppercase tracking-wider text-xs">Cliente</th>
+                        <th className="px-2 py-2.5 text-center font-bold uppercase tracking-wider text-[11px] w-12">Ticket</th>
+                        <th className="px-1 py-2.5 text-center font-bold uppercase tracking-wider text-[11px] w-8">#</th>
+                        <th className="px-2 py-2.5 text-left font-bold uppercase tracking-wider text-[11px]">OE</th>
+                        <th className="px-2 py-2.5 text-left font-bold uppercase tracking-wider text-[11px]">Placa Tracto</th>
+                        <th className="px-2 py-2.5 text-left font-bold uppercase tracking-wider text-[11px]">Operador</th>
+                        <th className="px-2 py-2.5 text-left font-bold uppercase tracking-wider text-[11px]">Tipo Unidad</th>
+                        <th className="px-2 py-2.5 text-left font-bold uppercase tracking-wider text-[11px]">Línea Transp.</th>
+                        <th className="px-2 py-2.5 text-left font-bold uppercase tracking-wider text-[11px]">Cliente</th>
                         {showWarehouse && (
-                            <th className="px-4 py-3 text-left font-bold uppercase tracking-wider text-xs">Almacén</th>
+                            <th className="px-2 py-2.5 text-left font-bold uppercase tracking-wider text-[11px]">Almacén</th>
                         )}
-                        <th className="px-4 py-3 text-left font-bold uppercase tracking-wider text-xs">Producto</th>
-                        <th className="px-4 py-3 text-right font-bold uppercase tracking-wider text-xs">Tons. Prog.</th>
-                        <th className="px-4 py-3 text-center font-bold uppercase tracking-wider text-xs">En Planta</th>
-                        <th className="px-4 py-3 text-center font-bold uppercase tracking-wider text-xs w-12">Cronómetro</th>
-                        {showPrint && <th className="px-4 py-3 text-center font-bold uppercase tracking-wider text-xs">Reimp.</th>}
+                        <th className="px-2 py-2.5 text-left font-bold uppercase tracking-wider text-[11px]">Producto</th>
+                        <th className="px-2 py-2.5 text-right font-bold uppercase tracking-wider text-[11px]">Tons. Prog.</th>
+                        <th className="px-2 py-2.5 text-center font-bold uppercase tracking-wider text-[11px] w-28 sm:w-32">EN PROCESO</th>
+                        <th className="px-2 py-2.5 text-center font-bold uppercase tracking-wider text-[11px] w-24">Cronómetro</th>
+                        {showPrint && <th className="px-1 py-2.5 text-center font-bold uppercase tracking-wider text-[11px] w-10">Reimp.</th>}
                     </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-100">
                     {rows.map((row) => (
                         <tr
                             key={row.id}
-                            className={`transition-colors duration-100 ${row.is_pending
-                                ? "hover:bg-amber-50"
-                                : "hover:bg-emerald-50"
-                                }`}
+                            className={`transition-colors duration-100 ${
+                                row.is_pending
+                                    ? "hover:bg-amber-50/70"
+                                    : "hover:bg-emerald-50/70"
+                            }`}
                         >
-                            <td className="px-4 py-3 text-center">
+                            <td className="px-2 py-2 text-center">
                                 {row.ticket_status === 'checkmark' && (
                                     <div className="flex justify-center" title="Ticket generado (Pendiente de carga)">
-                                        <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                                        <CheckCircle2 className="w-4 h-4 text-emerald-500" />
                                     </div>
                                 )}
                                 {row.ticket_status === 'x' && (
                                     <div className="flex justify-center" title="Sin ticket generado">
-                                        <X className="w-5 h-5 text-red-500" />
+                                        <X className="w-4 h-4 text-red-500" />
                                     </div>
                                 )}
                                 {!row.ticket_status && <span className="text-gray-300">—</span>}
                             </td>
-                            <td className="px-4 py-3 text-center text-gray-400 font-semibold">{row.num}</td>
-                            <td className="px-4 py-3 font-bold text-indigo-700 uppercase whitespace-nowrap">
+                            <td className="px-1 py-2 text-center text-gray-400 font-semibold">{row.num}</td>
+                            <td className="px-2 py-2 font-bold text-indigo-700 uppercase whitespace-nowrap">
                                 {row.folio}
                             </td>
-                            <td className="px-4 py-3 whitespace-nowrap font-mono text-gray-700 uppercase">
+                            <td className="px-2 py-2 whitespace-nowrap font-mono text-gray-700 uppercase text-[11px]">
                                 {row.tractor_plate}
                             </td>
-                            <td className="px-4 py-3 whitespace-nowrap text-gray-800 font-medium uppercase">
+                            <td className="px-2 py-2 text-gray-800 font-medium uppercase max-w-[150px] truncate" title={row.operator_name}>
                                 {row.operator_name}
                             </td>
-                            <td className="px-4 py-3 whitespace-nowrap text-gray-600">
+                            <td className="px-2 py-2 text-gray-600 max-w-[130px] truncate" title={row.unit_type}>
                                 {row.unit_type}
                             </td>
-                            <td className="px-4 py-3 text-gray-600 max-w-[160px] truncate" title={row.transport_company}>
+                            <td className="px-2 py-2 text-gray-600 max-w-[140px] truncate" title={row.transport_company}>
                                 {row.transport_company}
                             </td>
-                            <td className="px-4 py-3 text-gray-800 font-medium max-w-[180px] truncate" title={row.client}>
+                            <td className="px-2 py-2 text-gray-800 font-medium max-w-[150px] truncate" title={row.client}>
                                 {row.client}
                             </td>
                             {showWarehouse && (
-                                <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
+                                <td className="px-2 py-2 text-gray-600 whitespace-nowrap">
                                     {row.warehouse !== "N/A" ? (
                                         <span className="inline-flex items-center gap-1 text-indigo-700 font-semibold">
-                                            <Warehouse className="w-3.5 h-3.5" />
+                                            <Warehouse className="w-3 h-3" />
                                             {row.warehouse}
                                         </span>
                                     ) : (
@@ -247,32 +276,32 @@ function OeTable({
                                     )}
                                 </td>
                             )}
-                            <td className="px-4 py-3 text-gray-700 max-w-[200px]" title={row.product}>
+                            <td className="px-2 py-2 text-gray-700 max-w-[160px] truncate" title={row.product}>
                                 {row.product}
                             </td>
-                            <td className="px-4 py-3 text-right font-bold text-indigo-900 whitespace-nowrap">
+                            <td className="px-2 py-2 text-right font-bold text-indigo-900 whitespace-nowrap">
                                 {row.programmed_tons.toLocaleString("en-US", {
                                     minimumFractionDigits: 2,
                                     maximumFractionDigits: 2,
                                 })}{" "}
                                 TM
                             </td>
-                            <td className="px-4 py-3 text-center">
+                            <td className="px-2 py-2 text-center">
                                 <StatusBadge row={row} />
                             </td>
-                            <td className="px-4 py-3 text-center">
+                            <td className="px-2 py-2 text-center">
                                 <TimerCell row={row} />
                             </td>
                             {showPrint && (
-                                <td className="px-4 py-3 text-center">
+                                <td className="px-1 py-2 text-center">
                                     <a
                                         href={row.id ? `/documentation/shipment-orders/${row.id}/print` : "#"}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="inline-flex items-center justify-center p-1.5 rounded-lg text-indigo-600 hover:bg-indigo-100 transition-colors"
+                                        className="inline-flex items-center justify-center p-1 rounded-md text-indigo-600 hover:bg-indigo-100 transition-colors"
                                         title="Reimprimir OE"
                                     >
-                                        <Printer className="w-4 h-4" />
+                                        <Printer className="w-3.5 h-3.5" />
                                     </a>
                                 </td>
                             )}
@@ -295,54 +324,56 @@ function Section({ rows, label, showPrint = true }: { rows: OeRow[]; label: stri
     const completed = rows.filter((r) => !r.is_pending);
     const currentItems = subTab === "pending" ? pending : completed;
 
-    // Paginación lógica
     const totalPages = Math.ceil(currentItems.length / pageSize);
     const paginatedItems = currentItems.slice(
         (currentPage - 1) * pageSize,
         currentPage * pageSize
     );
 
-    // Resetear página al cambiar de pestaña
     useEffect(() => {
         setCurrentPage(1);
     }, [subTab]);
 
     return (
-        <div className="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden w-full">
             {/* Sub-tab bar */}
             <div className="flex border-b border-gray-100">
                 <button
                     onClick={() => setSubTab("pending")}
-                    className={`flex-1 py-3 text-sm font-bold transition-colors flex items-center justify-center gap-2 ${subTab === "pending"
-                        ? "bg-amber-50 text-amber-700 border-b-2 border-amber-500"
-                        : "text-gray-500 hover:bg-gray-50"
-                        }`}
+                    className={`flex-1 py-3 text-xs sm:text-sm font-bold transition-colors flex items-center justify-center gap-2 ${
+                        subTab === "pending"
+                            ? "bg-amber-50 text-amber-700 border-b-2 border-amber-500"
+                            : "text-gray-500 hover:bg-gray-50"
+                    }`}
                 >
-                    <Hourglass className="w-4 h-4" />
+                    <Hourglass className="w-3.5 h-3.5" />
                     Pendientes
                     <span
-                        className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${subTab === "pending"
-                            ? "bg-amber-200 text-amber-800"
-                            : "bg-gray-200 text-gray-600"
-                            }`}
+                        className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${
+                            subTab === "pending"
+                                ? "bg-amber-200 text-amber-800"
+                                : "bg-gray-200 text-gray-600"
+                        }`}
                     >
                         {pending.length}
                     </span>
                 </button>
                 <button
                     onClick={() => setSubTab("completed")}
-                    className={`flex-1 py-3 text-sm font-bold transition-colors flex items-center justify-center gap-2 ${subTab === "completed"
-                        ? "bg-emerald-50 text-emerald-700 border-b-2 border-emerald-500"
-                        : "text-gray-500 hover:bg-gray-50"
-                        }`}
+                    className={`flex-1 py-3 text-xs sm:text-sm font-bold transition-colors flex items-center justify-center gap-2 ${
+                        subTab === "completed"
+                            ? "bg-emerald-50 text-emerald-700 border-b-2 border-emerald-500"
+                            : "text-gray-500 hover:bg-gray-50"
+                    }`}
                 >
-                    <CheckCircle2 className="w-4 h-4" />
+                    <CheckCircle2 className="w-3.5 h-3.5" />
                     Completadas
                     <span
-                        className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${subTab === "completed"
-                            ? "bg-emerald-200 text-emerald-800"
-                            : "bg-gray-200 text-gray-600"
-                            }`}
+                        className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${
+                            subTab === "completed"
+                                ? "bg-emerald-200 text-emerald-800"
+                                : "bg-gray-200 text-gray-600"
+                        }`}
                     >
                         {completed.length}
                     </span>
@@ -354,15 +385,15 @@ function Section({ rows, label, showPrint = true }: { rows: OeRow[]; label: stri
 
             {/* Pagination Controls */}
             {totalPages > 1 && (
-                <div className="px-6 py-4 bg-white border-t border-gray-100 flex items-center justify-between">
+                <div className="px-4 py-3 bg-white border-t border-gray-100 flex items-center justify-between">
                     <p className="text-xs text-gray-500">
                         Mostrando <span className="font-bold">{(currentPage - 1) * pageSize + 1}</span> a <span className="font-bold">{Math.min(currentPage * pageSize, currentItems.length)}</span> de <span className="font-bold">{currentItems.length}</span> registros
                     </p>
-                    <div className="flex gap-2">
+                    <div className="flex gap-1.5">
                         <button
                             disabled={currentPage === 1}
                             onClick={() => setCurrentPage(prev => prev - 1)}
-                            className="px-3 py-1 rounded border border-gray-300 text-xs font-medium hover:bg-gray-50 disabled:opacity-50"
+                            className="px-2.5 py-1 rounded border border-gray-300 text-xs font-medium hover:bg-gray-50 disabled:opacity-50"
                         >
                             Anterior
                         </button>
@@ -370,7 +401,7 @@ function Section({ rows, label, showPrint = true }: { rows: OeRow[]; label: stri
                             <button
                                 key={i}
                                 onClick={() => setCurrentPage(i + 1)}
-                                className={`px-3 py-1 rounded border text-xs font-medium transition-colors ${currentPage === i + 1 ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+                                className={`px-2.5 py-1 rounded border text-xs font-medium transition-colors ${currentPage === i + 1 ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
                             >
                                 {i + 1}
                             </button>
@@ -378,7 +409,7 @@ function Section({ rows, label, showPrint = true }: { rows: OeRow[]; label: stri
                         <button
                             disabled={currentPage === totalPages}
                             onClick={() => setCurrentPage(prev => prev + 1)}
-                            className="px-3 py-1 rounded border border-gray-300 text-xs font-medium hover:bg-gray-50 disabled:opacity-50"
+                            className="px-2.5 py-1 rounded border border-gray-300 text-xs font-medium hover:bg-gray-50 disabled:opacity-50"
                         >
                             Siguiente
                         </button>
@@ -388,7 +419,7 @@ function Section({ rows, label, showPrint = true }: { rows: OeRow[]; label: stri
 
             {/* Totals footer */}
             {currentItems.length > 0 && (
-                <div className="px-6 py-3 bg-gray-50 border-t border-gray-100 flex flex-wrap gap-6 text-sm text-gray-600">
+                <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex flex-wrap gap-4 text-xs text-gray-600">
                     <span>
                         <strong className="text-gray-800">{currentItems.length}</strong> registros totales
                     </span>
@@ -401,7 +432,7 @@ function Section({ rows, label, showPrint = true }: { rows: OeRow[]; label: stri
                                     minimumFractionDigits: 2,
                                     maximumFractionDigits: 2,
                                 })}
-                            TM
+                            {" "}TM
                         </strong>
                     </span>
                 </div>
@@ -409,7 +440,6 @@ function Section({ rows, label, showPrint = true }: { rows: OeRow[]; label: stri
         </div>
     );
 }
-
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
@@ -429,12 +459,12 @@ export default function OeTrackerIndex({
     saderEnvasado,
     saderGranel,
     filters,
-    envasadoClients,
-    envasadoProducts,
-    granelClients,
-    granelProducts,
-    saderEnvasadoProducts,
-    saderGranelProducts,
+    envasadoClients = [],
+    envasadoProducts = [],
+    granelClients = [],
+    granelProducts = [],
+    saderEnvasadoProducts = [],
+    saderGranelProducts = [],
 }: PageProps) {
     const [activeTab, setActiveTab] = useState<TabKey>("envasado");
     const [search, setSearch] = useState(filters.search || "");
@@ -458,14 +488,16 @@ export default function OeTrackerIndex({
         client_id?: string,
         product_id?: string
     } = {}) => {
+        const fromParam = new URLSearchParams(window.location.search).get("from") || filters.from;
         router.get(
-            "/documentation/oe-tracker",
+            route("documentation.oe-tracker"),
             {
                 search: params.search !== undefined ? params.search : search,
                 in_plant: params.in_plant !== undefined ? params.in_plant : inPlant,
                 client_id: params.client_id !== undefined ? params.client_id : selectedClient,
                 product_id: params.product_id !== undefined ? params.product_id : selectedProduct,
-                module: filters.module
+                module: filters.module,
+                ...(fromParam ? { from: fromParam } : {})
             },
             { preserveState: true, replace: true }
         );
@@ -489,179 +521,147 @@ export default function OeTrackerIndex({
         amber: "hover:text-amber-700 hover:bg-amber-50",
     };
 
+    const fromParam = typeof window !== 'undefined' ? (new URLSearchParams(window.location.search).get("from") || filters.from) : filters.from;
+    const isFromProduction = filters.module === 'apt' && fromParam === 'production';
+
     return (
-        <DashboardLayout user={auth.user} header="Seguimiento de OE del Día">
+        <DashboardLayout user={auth.user} header="Seguimiento de OE del Dia">
             <Head title="Seguimiento de OE" />
 
-            <div className="py-8 max-w-[98%] mx-auto px-4 sm:px-6 lg:px-8">
-                {/* Header */}
-                <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="w-full space-y-4">
+                {/* Back Link */}
+                <div>
+                    <Link
+                        href={
+                            filters.module === 'scale'
+                                ? route('scale.index')
+                                : isFromProduction
+                                    ? route('apt.production')
+                                    : filters.module === 'apt'
+                                        ? route('apt.index')
+                                        : route('documentation.index')
+                        }
+                        className="text-gray-500 hover:text-indigo-700 inline-flex items-center text-xs sm:text-sm font-medium transition-colors"
+                    >
+                        <ArrowLeft className="w-3.5 h-3.5 mr-1" />
+                        {
+                            filters.module === 'scale'
+                                ? "Volver a Báscula"
+                                : isFromProduction
+                                    ? "Volver a Gestión de almacenes"
+                                    : filters.module === 'apt'
+                                        ? "Volver a APT"
+                                        : "Volver a Documentación"
+                        }
+                    </Link>
+                </div>
+
+                {/* Top Header & Filters Bar */}
+                <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
                     <div>
-                        <Link
-                            href={filters.module === 'scale' ? "/scale" : filters.module === 'apt' ? "/apt" : "/documentation"}
-                            className="text-gray-500 hover:text-gray-900 flex items-center text-sm font-medium transition-colors mb-2"
-                        >
-                            <ArrowLeft className="w-4 h-4 mr-1" />
-                            {filters.module === 'scale' ? "Volver a Báscula" : filters.module === 'apt' ? "Volver a APT" : "Volver a Documentación"}
-                        </Link>
-                        <h2 className="text-2xl font-bold text-indigo-900 flex items-center">
-                            <Clock className="mr-3 h-7 w-7 text-indigo-600" />
+                        <h2 className="text-xl sm:text-2xl font-black text-indigo-900 uppercase tracking-tight flex items-center">
+                            <Clock className="mr-2.5 h-6 w-6 sm:h-7 sm:w-7 text-indigo-600 shrink-0" />
                             Monitoreo Global de OE
                         </h2>
-                        <p className="text-sm text-gray-500 mt-1">
+                        <p className="text-xs sm:text-sm text-gray-500 font-medium ml-8.5 sm:ml-9.5 mt-0.5">
                             Listado de todas las órdenes pendientes y completadas (Sin corte operativo)
                         </p>
                     </div>
 
-                    {/* Filters */}
-                    <div className="flex flex-wrap gap-3 items-center">
-                        <div className="relative">
-                            <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400 pointer-events-none" />
+                    <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative min-w-[170px] flex-1 sm:flex-initial">
+                            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
                             <input
                                 type="text"
                                 value={search}
-                                onChange={(e) => setSearch(e.target.value)}
+                                onChange={(event) => setSearch(event.target.value)}
                                 onKeyDown={handleSearchKeyDown}
-                                placeholder="Buscar folio, operador…"
-                                className="pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm w-56 focus:ring-indigo-500 focus:border-indigo-500"
+                                placeholder="Buscar folio, operador..."
+                                className="w-full rounded-xl border border-gray-200 bg-white py-1.5 pl-8 pr-3 text-xs sm:text-sm font-medium shadow-sm focus:border-indigo-500 focus:bg-white focus:ring-1 focus:ring-indigo-500"
                             />
                         </div>
-
-                        {/* Client Filter (Only for regular Envasado/Granel) */}
-                        {(activeTab === 'envasado' || activeTab === 'granel') && (
-                            <div className="relative">
-                                <select
-                                    value={selectedClient}
-                                    onChange={(e) => {
-                                        const val = e.target.value;
-                                        setSelectedClient(val);
-                                        applyFilters({ client_id: val });
-                                    }}
-                                    className="pl-3 pr-8 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-indigo-500 focus:border-indigo-500 font-bold text-gray-700 h-[38px] max-w-[200px]"
-                                >
-                                    <option value="">Todos los Clientes</option>
-                                    {currentClients.map((c) => (
-                                        <option key={c.id} value={c.id}>{c.business_name || c.name}</option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-
-                        {/* Product Filter */}
-                        <div className="relative">
-                            <select
-                                value={selectedProduct}
-                                onChange={(e) => {
-                                    const val = e.target.value;
-                                    setSelectedProduct(val);
-                                    applyFilters({ product_id: val });
-                                }}
-                                className="pl-3 pr-8 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-indigo-500 focus:border-indigo-500 font-bold text-gray-700 h-[38px] max-w-[200px]"
-                            >
-                                <option value="">Todos los Productos</option>
-                                {currentProducts.map((p) => (
-                                    <option key={p.id} value={p.id}>{p.name}</option>
-                                ))}
-                            </select>
-                        </div>
-
-                        {/* En Planta Filter */}
-                        <div className="relative">
-                            <select
-                                value={inPlant}
-                                onChange={(e) => {
-                                    const val = e.target.value;
-                                    setInPlant(val);
-                                    applyFilters({ in_plant: val });
-                                }}
-                                className="pl-3 pr-8 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-indigo-500 focus:border-indigo-500 font-bold text-gray-700 h-[38px]"
-                            >
-                                <option value="all">Filtro: En Planta (Todos)</option>
-                                <option value="si">Solo: SÍ (En Planta)</option>
-                                <option value="no">Solo: NO (Sin Ticket)</option>
-                            </select>
-                        </div>
-
-                        <button
-                            onClick={() => applyFilters()}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors"
+                        <select
+                            value={selectedClient}
+                            onChange={(event) => { setSelectedClient(event.target.value); applyFilters({ client_id: event.target.value }); }}
+                            className="rounded-xl border border-gray-200 bg-white px-2.5 py-1.5 text-xs sm:text-sm font-semibold shadow-sm focus:border-indigo-500"
                         >
-                            <RefreshCw className="w-4 h-4" />
+                            <option value="">Todos los Clientes</option>
+                            {currentClients.map((client) => (
+                                <option key={client.id} value={client.id}>{client.business_name || client.name}</option>
+                            ))}
+                        </select>
+                        <select
+                            value={selectedProduct}
+                            onChange={(event) => { setSelectedProduct(event.target.value); applyFilters({ product_id: event.target.value }); }}
+                            className="rounded-xl border border-gray-200 bg-white px-2.5 py-1.5 text-xs sm:text-sm font-semibold shadow-sm focus:border-indigo-500"
+                        >
+                            <option value="">Todos los Productos</option>
+                            {currentProducts.map((product) => (
+                                <option key={product.id} value={product.id}>{product.name}</option>
+                            ))}
+                        </select>
+                        <select
+                            value={inPlant}
+                            onChange={(event) => { setInPlant(event.target.value); applyFilters({ in_plant: event.target.value }); }}
+                            className="rounded-xl border border-gray-200 bg-white px-2.5 py-1.5 text-xs sm:text-sm font-semibold shadow-sm focus:border-indigo-500"
+                        >
+                            <option value="all">Filtro: En Proceso (Todos)</option>
+                            <option value="si">En Planta / Cargando</option>
+                            <option value="no">Por Ingresar</option>
+                        </select>
+                        <button
+                            type="button"
+                            onClick={() => applyFilters()}
+                            className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-1.5 text-xs sm:text-sm font-bold text-white shadow-sm transition hover:bg-indigo-700 shrink-0"
+                        >
+                            <RefreshCw className="h-3.5 w-3.5" />
                             Actualizar
                         </button>
                     </div>
                 </div>
 
-                {/* Dynamic Legend */}
-                <div className="mb-6 flex justify-center animate-fade-in">
-                    <div className="bg-indigo-50 border border-indigo-200 px-8 py-3.5 rounded-2xl flex items-center gap-4 shadow-sm border-b-4 border-b-indigo-200 active:scale-95 transition-transform cursor-default group">
-                        <div className="bg-indigo-600 p-3 rounded-xl transition-transform group-hover:rotate-12 shadow-lg shadow-indigo-200">
-                            <Package className="w-7 h-7 text-white" />
+                {/* Vista Actual Indicator */}
+                <div className="flex justify-center pt-1 pb-1">
+                    <div className="flex items-center gap-3 rounded-2xl bg-indigo-50/80 border border-indigo-100/80 px-6 py-2 shadow-sm">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
+                            <Package className="h-5 w-5" />
                         </div>
-                        <div className="flex flex-col">
-                            <span className="text-xs font-black text-indigo-400 uppercase tracking-widest leading-none mb-1">
-                                {((selectedClient && (activeTab === 'envasado' || activeTab === 'granel')) || selectedProduct) ? "Filtrado por:" : "Vista actual:"}
-                            </span>
-                            <div className="flex items-center gap-2">
-                                <h3 className="text-2xl font-black text-indigo-900 leading-tight">
-                                    {TABS.find(t => t.key === activeTab)?.label}
-                                    {((selectedClient && (activeTab === 'envasado' || activeTab === 'granel')) || selectedProduct) && <span className="text-indigo-300 mx-2">|</span>}
-                                    {selectedClient && (activeTab === 'envasado' || activeTab === 'granel') && currentClients.find(c => c.id.toString() === selectedClient.toString())?.business_name}
-                                    {selectedClient && (activeTab === 'envasado' || activeTab === 'granel') && selectedProduct && <span className="text-indigo-300 mx-1">|</span>}
-                                    {selectedProduct && currentProducts.find(p => p.id.toString() === selectedProduct.toString())?.name}
-                                </h3>
-                                {((selectedClient && (activeTab === 'envasado' || activeTab === 'granel')) || selectedProduct) && (
-                                    <button
-                                        onClick={() => {
-                                            setSelectedClient("");
-                                            setSelectedProduct("");
-                                            applyFilters({ client_id: "", product_id: "" });
-                                        }}
-                                        className="ml-3 p-1.5 hover:bg-red-100 rounded-full text-indigo-300 hover:text-red-600 transition-colors"
-                                        title="Limpiar filtros"
-                                    >
-                                        <X className="w-5 h-5" />
-                                    </button>
-                                )}
-                            </div>
+                        <div>
+                            <span className="block text-[10px] font-black uppercase tracking-widest text-indigo-400">Vista actual:</span>
+                            <span className="block text-base sm:text-lg font-black text-indigo-900 leading-none">{TABS.find((tab) => tab.key === activeTab)?.label}</span>
                         </div>
                     </div>
                 </div>
 
-                {/* Presentation Tabs */}
-                <div className="flex border-b border-gray-200 mb-6 overflow-x-auto">
-                    {TABS.map((tab) => {
-                        const total = data[tab.key].length;
-                        const isActive = activeTab === tab.key;
-                        return (
-                            <button
-                                key={tab.key}
-                                onClick={() => setActiveTab(tab.key)}
-                                className={`flex items-center gap-2 px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isActive
-                                    ? `${tabColorMap[tab.color]} border-b-4`
+                {/* Tabs */}
+                <div className="flex overflow-x-auto rounded-t-2xl border-b border-gray-200 bg-white shadow-sm">
+                    {TABS.map((tab) => (
+                        <button
+                            key={tab.key}
+                            type="button"
+                            onClick={() => setActiveTab(tab.key)}
+                            className={`flex items-center gap-2 whitespace-nowrap border-b-4 px-6 py-4 text-xs sm:text-sm font-bold uppercase tracking-wider transition-colors ${
+                                activeTab === tab.key
+                                    ? tabColorMap[tab.color]
                                     : `border-transparent text-gray-500 ${tabIdleMap[tab.color]}`
-                                    }`}
+                            }`}
+                        >
+                            {tab.label}
+                            <span
+                                className={`ml-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                                    activeTab === tab.key ? "bg-white/70 text-indigo-900" : "bg-gray-100 text-gray-500"
+                                }`}
                             >
-                                {tab.label}
-                                <span
-                                    className={`px-2 py-0.5 rounded-full text-xs font-bold ${isActive
-                                        ? "bg-white/70 text-gray-800"
-                                        : "bg-gray-100 text-gray-600"
-                                        }`}
-                                >
-                                    {total}
-                                </span>
-                            </button>
-                        );
-                    })}
+                                {data[tab.key].length}
+                            </span>
+                        </button>
+                    ))}
                 </div>
 
-                {/* Active Section */}
-                <Section
-                    rows={data[activeTab]}
-                    label={TABS.find((t) => t.key === activeTab)!.label}
-                    showPrint={filters.module !== 'apt'}
-                />
+                {/* Tab Content Section */}
+                <div>
+                    <Section rows={data[activeTab]} label={TABS.find((tab) => tab.key === activeTab)?.label || ""} />
+                </div>
             </div>
         </DashboardLayout>
     );

@@ -24,6 +24,7 @@ import { QrReader } from "react-qr-reader";
 
 export default function Index({ auth, pending_logs, in_plant, history }: { auth: any, pending_logs: any[], in_plant: any[], history: any }) {
     const [activeTab, setActiveTab] = useState("scan");
+    const [pendingLogs, setPendingLogs] = useState<any[]>(pending_logs);
     const [qrInput, setQrInput] = useState("");
     const [viewingLog, setViewingLog] = useState<any>(null);
     const [exitModalLog, setExitModalLog] = useState<any>(null);
@@ -45,6 +46,12 @@ export default function Index({ auth, pending_logs, in_plant, history }: { auth:
         try {
             const response = await axios.post(route('surveillance.scan'), { qr: code });
             const data = response.data;
+
+            setPendingLogs((currentLogs) => [
+                { ...data.log, subject: data.subject },
+                ...currentLogs,
+            ]);
+            setActiveTab("pending");
 
             // Success Notification
             Swal.fire({
@@ -107,7 +114,7 @@ export default function Index({ auth, pending_logs, in_plant, history }: { auth:
                     authorized: authorized
                 }, {
                     onSuccess: () => {
-                        // Success toast
+                        setPendingLogs((currentLogs) => currentLogs.filter((log) => log.id !== logId));
                     }
                 });
             }
@@ -169,7 +176,7 @@ export default function Index({ auth, pending_logs, in_plant, history }: { auth:
                             <Clock className={`w-5 h-5 mr-2 ${activeTab === "pending" ? "text-indigo-600" : "text-gray-400"}`} />
                             Pendientes
                             <span className={`ml-2 py-0.5 px-2.5 rounded-full text-xs ${activeTab === "pending" ? "bg-indigo-600 text-white" : "bg-gray-200 text-gray-600"}`}>
-                                {pending_logs.length}
+                                {pendingLogs.length}
                             </span>
                         </button>
                         <button
@@ -279,7 +286,7 @@ export default function Index({ auth, pending_logs, in_plant, history }: { auth:
                                         </tr>
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-100">
-                                        {pending_logs.length === 0 ? (
+                                        {pendingLogs.length === 0 ? (
                                             <tr>
                                                 <td colSpan={4} className="px-6 py-16 text-center text-gray-500 bg-gray-50/50">
                                                     <Clock className="w-12 h-12 text-gray-300 mx-auto mb-3" />
@@ -288,7 +295,7 @@ export default function Index({ auth, pending_logs, in_plant, history }: { auth:
                                                 </td>
                                             </tr>
                                         ) : (
-                                            pending_logs.map((log) => (
+                                            pendingLogs.map((log) => (
                                                 <tr key={log.id} className="hover:bg-indigo-50/50 transition-colors duration-200 text-gray-700">
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                                         <div className="flex items-center text-gray-900">

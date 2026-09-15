@@ -34,14 +34,23 @@ export default function Create({ auth }: { auth: any }) {
             <Head title="Crear Lote" />
 
             <div className="max-w-5xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-                <div className="mb-6">
+                <div className="mb-6 flex flex-wrap items-center gap-x-6 gap-y-2">
                     <Link
-                        href={route("apt.lots.index")}
+                        href={new URLSearchParams(window.location.search).get("from") === "production" ? `${route("apt.lots.index")}?from=production` : route("apt.lots.index")}
                         className="text-gray-500 hover:text-gray-900 flex items-center text-sm font-medium transition-colors"
                     >
                         <ArrowLeft className="w-4 h-4 mr-1" />
                         Volver a Gestión de Lotes
                     </Link>
+                    {new URLSearchParams(window.location.search).get("from") === "production" && (
+                        <Link
+                            href={route("apt.production")}
+                            className="text-gray-600 hover:text-sky-700 flex items-center text-sm font-bold transition-colors bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm"
+                        >
+                            <ArrowLeft className="w-4 h-4 mr-1" />
+                            Volver al menú de submódulos
+                        </Link>
+                    )}
                 </div>
 
                 <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">

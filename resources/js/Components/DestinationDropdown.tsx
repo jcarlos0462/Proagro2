@@ -19,13 +19,14 @@ interface Destination {
 
 interface DestinationDropdownProps {
     value?: number | string;
+    initialDestinations?: Destination[];
     onChange: (id: number) => void;
     label?: string;
     error?: string;
 }
 
-export default function DestinationDropdown({ value, onChange, label = "Destino", error }: DestinationDropdownProps) {
-    const [destinations, setDestinations] = useState<Destination[]>([]);
+export default function DestinationDropdown({ value, initialDestinations = [], onChange, label = "Destino", error }: DestinationDropdownProps) {
+    const [destinations, setDestinations] = useState<Destination[]>(initialDestinations);
     const [loading, setLoading] = useState(false);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingDestination, setEditingDestination] = useState<Destination | null>(null);
@@ -35,15 +36,9 @@ export default function DestinationDropdown({ value, onChange, label = "Destino"
     const fetchDestinations = async () => {
         setLoading(true);
         try {
-            const response = await axios.get('/shipment-destinations');
-            setDestinations(response.data);
-
-            // If we have a string value (legacy), try to find the matching ID and update parent
-            if (typeof value === 'string' && value && response.data.length > 0) {
-                const matched = response.data.find((d: Destination) => d.name === value);
-                if (matched) {
-                    onChange(matched.id);
-                }
+            const response = await axios.get(route('shipment-destinations.index'));
+            if (Array.isArray(response.data)) {
+                setDestinations(response.data);
             }
         } catch (error) {
             console.error("Error fetching destinations:", error);
@@ -56,20 +51,32 @@ export default function DestinationDropdown({ value, onChange, label = "Destino"
         fetchDestinations();
     }, []);
 
+    useEffect(() => {
+        if (initialDestinations && initialDestinations.length > 0) {
+            setDestinations(initialDestinations);
+        }
+    }, [initialDestinations]);
+
     const handleSave = async () => {
         if (!newName.trim()) return;
         setIsSaving(true);
         try {
+            let savedId: number | null = null;
             if (editingDestination) {
-                await axios.put(`/shipment-destinations/${editingDestination.id}`, { name: newName });
+                const resp = await axios.put(route('shipment-destinations.update', editingDestination.id), { name: newName.trim() });
+                savedId = resp.data?.id;
             } else {
-                const resp = await axios.post('/shipment-destinations', { name: newName });
-                if (!value) onChange(resp.data.id); // Auto-select if nothing selected
+                const resp = await axios.post(route('shipment-destinations.store'), { name: newName.trim() });
+                savedId = resp.data?.id;
             }
             await fetchDestinations();
+            if (savedId) {
+                onChange(savedId);
+            }
             closeDialog();
         } catch (error: any) {
-            alert(error.response?.data?.message || "Error al guardar destino");
+            const errorMsg = error.response?.data?.errors?.name?.[0] || error.response?.data?.message || "Error al guardar destino";
+            alert(errorMsg);
         } finally {
             setIsSaving(false);
         }
@@ -79,9 +86,8 @@ export default function DestinationDropdown({ value, onChange, label = "Destino"
         e.stopPropagation();
         if (!confirm(`¿Estás seguro de eliminar "${destination.name}"?`)) return;
         try {
-            await axios.delete(`/shipment-destinations/${destination.id}`);
+            await axios.delete(route('shipment-destinations.destroy', destination.id));
             if (Number(value) === destination.id) {
-                // Find another or clear
                 const firstOther = destinations.find(d => d.id !== destination.id);
                 if (firstOther) onChange(firstOther.id);
             }
@@ -146,7 +152,7 @@ export default function DestinationDropdown({ value, onChange, label = "Destino"
                                 </button>
                             </div>
 
-                            {loading ? (
+                            {loading && destinations.length === 0 ? (
                                 <div className="px-4 py-2 text-gray-400 italic">Cargando...</div>
                             ) : (
                                 destinations.map((destination) => (
