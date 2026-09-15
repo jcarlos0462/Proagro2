@@ -8,7 +8,7 @@
 
     <title inertia>{{ config('app.name', 'Laravel') }}</title>
     <link rel="icon" type="image/png"
-        href="{{ config('app.tenant.favicon') ? asset(config('app.tenant.favicon')) : asset('Proagro.png') }}">
+        href="{{ config('app.tenant.favicon') ?: '/Proagro.png' }}">
 
     <!-- PWA Meta Tags -->
     <meta name="theme-color" content="#1e1b4b">
@@ -16,7 +16,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="VECODE">
-    <link rel="manifest" href="{{ asset('build/manifest.webmanifest') }}">
+    <link rel="manifest" href="/build/manifest.webmanifest">
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.bunny.net">
@@ -28,7 +28,7 @@
 
     <!-- Scripts -->
     @routes
-    <!-- Cache Buster: v=3.1-migration-fix -->
+    <!-- Cache Buster: v=3.2-production-domain -->
     @viteReactRefresh
     @vite(['resources/js/app.tsx', "resources/js/Pages/{$page['component']}.tsx"])
     @inertiaHead
