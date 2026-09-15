@@ -25,10 +25,6 @@ class AppServiceProvider extends ServiceProvider
             URL::forceScheme('https');
         }
 
-        if (config('app.url')) {
-            URL::forceRootUrl(config('app.url'));
-        }
-
         Vite::prefetch(concurrency: 3);
     }
 }
