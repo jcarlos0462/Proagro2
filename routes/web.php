@@ -192,11 +192,41 @@ Route::middleware('auth')->group(function () {
 
         // Production Management
         Route::get('/apt/production', [\App\Http\Controllers\AptController::class , 'production'])->name('apt.production');
+        Route::get('/apt/production/hub', [\App\Http\Controllers\AptController::class , 'productionHub'])->name('apt.production.hub');
+        Route::get('/apt/management', [\App\Http\Controllers\AptController::class , 'productionManagement'])->name('apt.management');
+        Route::get('/apt/production/management', [\App\Http\Controllers\AptController::class , 'productionManagement']);
+        Route::post('/apt/management/turno', [\App\Http\Controllers\AptController::class , 'storeProductionShiftStart'])->name('apt.management.shift.store');
+        Route::get('/apt/management/activity', [\App\Http\Controllers\AptController::class , 'productionActivity'])->name('apt.management.activity');
+        Route::get('/apt/management/check-assigned-lots', [\App\Http\Controllers\AptController::class , 'checkAssignedLots'])->name('apt.management.check.assigned.lots');
+        Route::get('/apt/management/activity/print', [\App\Http\Controllers\AptController::class , 'printProductionActivityReport'])->name('apt.management.activity.print');
+        Route::post('/apt/management/activity', [\App\Http\Controllers\AptController::class , 'storeProductionActivity'])->name('apt.management.activity.store');
+        Route::patch('/apt/management/activity/lot/{shiftStart}/{lot}/close', [\App\Http\Controllers\AptController::class , 'closeProductionLot'])->name('apt.management.activity.lot.close');
+        Route::patch('/apt/management/activity/lot/{shiftStart}/{lot}/reopen', [\App\Http\Controllers\AptController::class , 'reopenProductionLot'])->name('apt.management.activity.lot.reopen');
+        Route::get('/apt/production/activity', [\App\Http\Controllers\AptController::class , 'productionActivity'])->name('apt.production.activity');
+        Route::get('/apt/management/lots-report', [\App\Http\Controllers\AptController::class , 'lotsReport'])->name('apt.management.lots.report');
+        Route::get('/apt/management/assignments-report', [\App\Http\Controllers\AptController::class , 'assignmentsReport'])->name('apt.management.assignments.report');
+        Route::get('/apt/management/assignments-control', [\App\Http\Controllers\AptController::class , 'assignmentsControl'])->name('apt.management.assignments.control');
+        Route::get('/apt/management/assignments-control-live', function () {
+            return redirect()->route('apt.management.assignments.control');
+        })->name('apt.management.assignments.control.live');
+        Route::get('/apt/management/lots-report/print', [\App\Http\Controllers\AptController::class , 'printLotsReport'])->name('apt.management.lots.report.print');
+        Route::get('/apt/management/lots-report/export', [\App\Http\Controllers\AptController::class , 'exportLotsReport'])->name('apt.management.lots.report.export');
 
         Route::get('/apt/operators/search', [\App\Http\Controllers\AptController::class , 'searchOperators'])->name('apt.operators.search');
         Route::get('/apt/operator', [\App\Http\Controllers\AptController::class , 'createOperator'])->name('apt.operators.create');
         Route::post('/apt/operator', [\App\Http\Controllers\AptController::class , 'storeOperator'])->name('apt.operators.store');
         Route::get('/apt/oe-tracker', [\App\Http\Controllers\DocumentationController::class , 'oeTrackerIndex'])->name('apt.oe-tracker');
+        Route::get('/apt/shipment-process', [\App\Http\Controllers\DocumentationController::class , 'shipmentProcessIndex'])->name('apt.shipment-process');
+
+        // APT Personnel Attendance (Control de Asistencias de Personal - GLS-AP-FO-005)
+        Route::get('/apt/attendance', [\App\Http\Controllers\AptAttendanceController::class, 'index'])->name('apt.attendance.index');
+        Route::get('/apt/attendance/create', [\App\Http\Controllers\AptAttendanceController::class, 'create'])->name('apt.attendance.create');
+        Route::post('/apt/attendance', [\App\Http\Controllers\AptAttendanceController::class, 'store'])->name('apt.attendance.store');
+        Route::get('/apt/attendance/{id}', [\App\Http\Controllers\AptAttendanceController::class, 'show'])->name('apt.attendance.show');
+        Route::get('/apt/attendance/{id}/print', [\App\Http\Controllers\AptAttendanceController::class, 'printAttendance'])->name('apt.attendance.print');
+        Route::get('/apt/attendance/{id}/edit', [\App\Http\Controllers\AptAttendanceController::class, 'edit'])->name('apt.attendance.edit');
+        Route::put('/apt/attendance/{id}', [\App\Http\Controllers\AptAttendanceController::class, 'update'])->name('apt.attendance.update');
+        Route::delete('/apt/attendance/{id}', [\App\Http\Controllers\AptAttendanceController::class, 'destroy'])->name('apt.attendance.destroy');
         // Admin Module
         Route::middleware(['role:Admin'])->prefix('admin')->name('admin.')->group(function () {
             Route::patch('users/{user}/toggle-block', [\App\Http\Controllers\Admin\AdminController::class , 'toggleBlock'])->name('users.toggle-block');
@@ -213,6 +243,11 @@ Route::middleware('auth')->group(function () {
             Route::get('/documentation/shipment-orders/create', 'createOrder')->name('documentation.create');
             Route::post('/documentation/shipment-orders', 'storeOrder')->name('documentation.store');
             Route::get('/documentation/shipment-orders/{id}/edit', 'editOrder')->name('documentation.edit');
+                Route::get('/documentation/shipment-orders/search-qr', 'searchQr')->name('documentation.shipment-orders.search-qr');
+                Route::post('/documentation/shipment-orders/save-loading', 'saveLoading')->name('documentation.shipment-orders.save-loading');
+                Route::get('/documentation/shipment-orders/loading-history', 'loadingHistory')->name('documentation.shipment-orders.loading-history');
+                Route::patch('/documentation/shipment-orders/{id}/finish-loading', 'finishLoading')->name('documentation.shipment-orders.finish-loading');
+                Route::delete('/documentation/shipment-orders/{id}/delete-loading', 'deleteLoading')->name('documentation.shipment-orders.delete-loading');
             Route::put('/documentation/shipment-orders/{id}', 'updateOrder')->name('documentation.update');
             Route::patch('/documentation/shipment-orders/{id}/cancel', 'cancelOrder')->name('documentation.cancel');
             Route::patch('/documentation/shipment-orders/{id}/reopen', 'reopenOrder')->name('documentation.reopen');
@@ -233,6 +268,14 @@ Route::middleware('auth')->group(function () {
         Route::post('/shipment-origins', [\App\Http\Controllers\ShipmentOriginController::class , 'store'])->name('shipment-origins.store');
         Route::put('/shipment-origins/{origin}', [\App\Http\Controllers\ShipmentOriginController::class , 'update'])->name('shipment-origins.update');
         Route::delete('/shipment-origins/{origin}', [\App\Http\Controllers\ShipmentOriginController::class , 'destroy'])->name('shipment-origins.destroy');
+
+        // Service Providers (Manageable Companies)
+        Route::get('/service-providers', [\App\Http\Controllers\ServiceProviderController::class, 'index'])->name('service-providers.index');
+        Route::post('/service-providers', [\App\Http\Controllers\ServiceProviderController::class, 'store'])->name('service-providers.store');
+        Route::put('/service-providers/{serviceProvider}', [\App\Http\Controllers\ServiceProviderController::class, 'update'])->name('service-providers.update');
+        Route::delete('/service-providers/{serviceProvider}', [\App\Http\Controllers\ServiceProviderController::class, 'destroy'])->name('service-providers.destroy');
+        Route::get('/loading-assistants', [\App\Http\Controllers\LoadingAssistantController::class, 'index'])->name('loading-assistants.index');
+        Route::post('/loading-assistants', [\App\Http\Controllers\LoadingAssistantController::class, 'store'])->name('loading-assistants.store');
 
         // Loading Order References (Scale module references)
         Route::get('/loading-order-references', [\App\Http\Controllers\LoadingOrderReferenceController::class , 'index'])->name('loading-order-references.index');
@@ -263,3 +306,15 @@ Route::middleware('auth')->group(function () {
     });
 
 require __DIR__ . '/auth.php';
+
+Route::get('/storage/{path}', function ($path) {
+    $filePath = storage_path('app/public/' . $path);
+    if (file_exists($filePath)) {
+        return response()->file($filePath);
+    }
+    $filePath2 = public_path('storage/' . $path);
+    if (file_exists($filePath2)) {
+        return response()->file($filePath2);
+    }
+    abort(404);
+})->where('path', '.*');

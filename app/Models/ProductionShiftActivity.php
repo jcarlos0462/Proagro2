@@ -35,6 +35,16 @@ class ProductionShiftActivity extends Model
 
     public function evidenceUrl(): ?string
     {
-        return $this->evidence_path ? asset('storage/'.$this->evidence_path) : null;
+        if (!$this->evidence_path) {
+            return null;
+        }
+        if (str_starts_with($this->evidence_path, 'http://') || str_starts_with($this->evidence_path, 'https://') || str_starts_with($this->evidence_path, 'data:')) {
+            return $this->evidence_path;
+        }
+        $path = ltrim($this->evidence_path, '/');
+        if (str_starts_with($path, 'storage/')) {
+            $path = substr($path, 8);
+        }
+        return asset('storage/' . $path);
     }
 }

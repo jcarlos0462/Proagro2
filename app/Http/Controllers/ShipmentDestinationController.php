@@ -15,12 +15,14 @@ class ShipmentDestinationController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'name' => 'required|string|unique:shipment_destinations,name|max:255',
+            'name' => 'required|string|max:255',
         ]);
 
-        $destination = ShipmentDestination::create([
-            'name' => strtoupper(trim($validated['name'])),
-        ]);
+        $name = mb_strtoupper(trim($validated['name']), 'UTF-8');
+
+        $destination = ShipmentDestination::firstOrCreate(
+            ['name' => $name]
+        );
 
         return response()->json($destination, 201);
     }
@@ -28,11 +30,21 @@ class ShipmentDestinationController extends Controller
     public function update(Request $request, ShipmentDestination $destination)
     {
         $validated = $request->validate([
-            'name' => 'required|string|unique:shipment_destinations,name,' . $destination->id . '|max:255',
+            'name' => 'required|string|max:255',
         ]);
 
+        $name = mb_strtoupper(trim($validated['name']), 'UTF-8');
+
+        $exists = ShipmentDestination::where('name', $name)->where('id', '!=', $destination->id)->first();
+        if ($exists) {
+            return response()->json([
+                'message' => 'El destino ya existe con este nombre.',
+                'errors' => ['name' => ['El destino ya existe con este nombre.']]
+            ], 422);
+        }
+
         $destination->update([
-            'name' => strtoupper(trim($validated['name'])),
+            'name' => $name,
         ]);
 
         return response()->json($destination);

@@ -58,6 +58,10 @@ class RolesAndPermissionsSeeder extends Seeder
         $role = Role::firstOrCreate(['name' => 'Almacen']);
         $role->givePermissionTo(['view dashboard', 'view apt']);
 
+        // Jefe de Almacen
+        $role = Role::firstOrCreate(['name' => 'Jefe de Almacen']);
+        $role->givePermissionTo(['view dashboard', 'view apt']);
+
         // Comercializacion
         $role = Role::firstOrCreate(['name' => 'Comercializacion']);
         $role->givePermissionTo(['view dashboard', 'view commercialization', 'view sales orders']);

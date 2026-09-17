@@ -39,7 +39,7 @@ class TenantMiddleware
                     'logo' => '/images/Proagro2.png',
                     'primary_color' => '#16a34a',
                     'secondary_color' => '#f0fdf4',
-                    'domain' => 'pro-agroindustria.online'
+                    'domain' => 'pro-agroindustria.com'
                 ],
                 'vecode' => [
                     'name' => 'VECODE LOGISTICS',
@@ -58,6 +58,13 @@ class TenantMiddleware
         }
 
         if ($tenant) {
+            if (isset($tenant->logo) && is_string($tenant->logo) && !str_starts_with($tenant->logo, 'http') && !str_starts_with($tenant->logo, 'data:')) {
+                $tenant->logo = asset(ltrim($tenant->logo, '/'));
+            }
+            if (isset($tenant->favicon) && is_string($tenant->favicon) && !str_starts_with($tenant->favicon, 'http') && !str_starts_with($tenant->favicon, 'data:')) {
+                $tenant->favicon = asset(ltrim($tenant->favicon, '/'));
+            }
+
             config(['app.tenant' => $tenant]);
             config(['app.name' => $tenant->name]);
 

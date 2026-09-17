@@ -82,8 +82,13 @@ class SalesOrder extends Model
     {
         $total = 0;
 
-        // Traverse all trips directly linked to the Sales Order
-        $tripsQuery = $this->trips()
+        // Traverse all trips linked to this Sales Order (directly or via shipment orders)
+        $tripsQuery = LoadingOrder::where(function ($q) {
+                $q->where('sales_order_id', $this->id)
+                  ->orWhereHas('shipment_order', function ($sq) {
+                      $sq->where('sales_order_id', $this->id);
+                  });
+            })
             ->with(['weight_ticket'])
             ->where('status', '!=', 'cancelled');
 
@@ -93,47 +98,15 @@ class SalesOrder extends Model
 
         $trips = $tripsQuery->get();
 
-        // 1. Check Packed Product (ENVASADO) from OE Snapshot
-        // We still need to handle Envasado differently as it may not have tickets
-        $shipmentsQuery = $this->shipments()
-            ->where('status', '!=', 'cancelled');
-        
-        if ($cutOff) {
-            $shipmentsQuery->where('created_at', '<=', $cutOff)
-                ->where(function($q) use ($cutOff) {
-                    $q->whereNull('cancelled_at')
-                      ->orWhere('cancelled_at', '>', $cutOff);
-                });
-        }
-        
-        $shipments = $shipmentsQuery->get();
-
-        foreach ($shipments as $shipment) {
-            if (strtoupper($shipment->presentation) === 'ENVASADO') {
-                $total += (float) ($shipment->programmed_tons ?? 0);
-            }
-        }
-
-        // 2. Sum regular trips for Bulk (GRANEL) or others using tickets
+        // Sum net weight for trips that have completed weighing (Destare)
         foreach ($trips as $trip) {
-            // Avoid double-counting if we already handled it as Envasado (Safety check)
-            if ($trip->shipment_order && strtoupper($trip->shipment_order->presentation) === 'ENVASADO') {
-                continue;
-            }
-
             if ($trip->weight_ticket) {
                 $ticket = $trip->weight_ticket;
-                $isCompletedAtTime = ($ticket->weighing_status === 'completed' && (!$cutOff || $ticket->weigh_out_at <= $cutOff));
-                
+                $isCompletedAtTime = ($ticket->weighing_status === 'completed' && (!$cutOff || ($ticket->weigh_out_at ? $ticket->weigh_out_at <= $cutOff : $ticket->created_at <= $cutOff)));
+
                 if ($isCompletedAtTime) {
-                    $total += ($ticket->net_weight / 1000);
-                } else {
-                    // In progress: Use programmed_tons (matches live "optimistic" behavior)
-                    $total += (float) ($trip->programmed_tons ?? 0);
+                    $total += ((float) $ticket->net_weight / 1000);
                 }
-            } else {
-                // No ticket yet: fallback to programmed_tons
-                $total += (float) ($trip->programmed_tons ?? 0);
             }
         }
 

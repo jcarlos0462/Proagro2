@@ -1166,6 +1166,8 @@ class WeightTicketController extends Controller
                 // Sync Sales Order if linked
                 if ($order->sales_order_id) {
                     $order->sales_order?->syncLoadedQuantity();
+                } elseif ($order->shipment_order && $order->shipment_order->sales_order_id) {
+                    $order->shipment_order->sales_order?->syncLoadedQuantity();
                 }
             });
 
@@ -1191,6 +1193,7 @@ class WeightTicketController extends Controller
         // Format dates
         $entryDate = $transactionEntryDate = \Carbon\Carbon::parse($ticket->weigh_in_at ?? $order->entry_at);
         $exitDate = \Carbon\Carbon::parse($ticket->weigh_out_at ?? now());
+        $operativeDate = OperationalTimeHelper::getOperativeDate($exitDate);
 
         // Robust Sale detection
         $isSale = empty($order->vessel_id) && !empty($order->shipment_order_id);
@@ -1244,7 +1247,7 @@ class WeightTicketController extends Controller
         $data = [
             'folio' => $order->folio,
             'ticket_number' => $ticket->ticket_number,
-            'date' => $exitDate->format('d/m/Y'),
+            'date' => \Carbon\Carbon::parse($operativeDate)->format('d/m/Y'),
             'time' => $exitDate->format('H:i:s'),
 
             'reference' => $isSpecialVesselWorkflow ? 'N/A' : ($isSale ? ($order->shipment_order->folio ?? 'N/A') : ($order->reference ?? 'N/A')),

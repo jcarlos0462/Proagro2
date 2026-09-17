@@ -14,6 +14,8 @@ class ShipmentOrder extends Model
 
     protected $casts = [
         'cancelled_at' => 'datetime',
+        'loaded_at' => 'datetime',
+        'loading_finished_at' => 'datetime',
     ];
 
     public function sales_order()
@@ -76,6 +78,11 @@ class ShipmentOrder extends Model
     public function scale_operator()
     {
         return $this->belongsTo(User::class, 'scale_operator_id');
+    }
+
+    public function lot()
+    {
+        return $this->belongsTo(Lot::class, 'lot_id');
     }
 
     public function loadingOrders()

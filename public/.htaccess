@@ -15,10 +15,6 @@
 
     RewriteEngine On
 
-    # Keep legacy local URLs from being used after the production move.
-    RewriteCond %{HTTP_HOST} ^(localhost|127\.0\.0\.1)(:[0-9]+)?$ [NC]
-    RewriteRule ^(.*)$ https://pro-agroindustria.online/$1 [R=301,L,NE]
-
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
@@ -30,10 +26,11 @@
     # Redirect Trailing Slashes If Not A Folder...
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_URI} (.+)/$
-    RewriteRule ^ %1 [L,R=301]
+    RewriteRule ^ %1 [END,R=301]
 
     # Send Requests To Front Controller...
+    RewriteRule ^index\.php$ - [END]
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_FILENAME} !-f
-    RewriteRule ^ index.php [L]
+    RewriteRule ^ index.php [END]
 </IfModule>

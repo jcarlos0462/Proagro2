@@ -71,25 +71,36 @@
     @apply border-border;
   }
 
-  /* Ensure cursor applies to interactive elements too */
+  /* Ensure cursor applies to all elements */
+  html,
+  body,
+  *,
+  *::before,
+  *::after {
+    cursor: url('/Proagroindustria2/images/cursor.png?v=3') 12 12, url('/Proagroindustria/images/cursor.png?v=3') 12 12, url('/images/cursor.png?v=3') 12 12, auto !important;
+  }
+
   a,
+  a *,
   button,
+  button *,
   input,
   select,
   textarea,
-  [role="button"] {
-    cursor: url('/images/cursor.png?v=3') 12 12, pointer;
-  }
-
-  body {
-    @apply bg-background text-foreground;
-    cursor: url('/images/cursor.png?v=3') 12 12, auto;
+  [role="button"],
+  [role="button"] *,
+  [role="tab"],
+  [role="tab"] *,
+  label,
+  .cursor-pointer,
+  .cursor-pointer * {
+    cursor: url('/Proagroindustria2/images/cursor.png?v=3') 12 12, url('/Proagroindustria/images/cursor.png?v=3') 12 12, url('/images/cursor.png?v=3') 12 12, pointer !important;
   }
 
   /* Sidebar Cursor - Monochromatic White */
   .sidebar-container,
   .sidebar-container * {
-    cursor: url('/images/cursor-white.png?v=3') 12 12, pointer !important;
+    cursor: url('/Proagroindustria2/images/cursor-white.png?v=3') 12 12, url('/Proagroindustria/images/cursor-white.png?v=3') 12 12, url('/images/cursor-white.png?v=3') 12 12, pointer !important;
   }
 
   /* Hide number input spin buttons */

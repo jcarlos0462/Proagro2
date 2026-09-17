@@ -15,12 +15,14 @@ class ShipmentOriginController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'name' => 'required|string|unique:shipment_origins,name|max:255',
+            'name' => 'required|string|max:255',
         ]);
 
-        $origin = ShipmentOrigin::create([
-            'name' => strtoupper($validated['name']),
-        ]);
+        $name = mb_strtoupper(trim($validated['name']), 'UTF-8');
+
+        $origin = ShipmentOrigin::firstOrCreate(
+            ['name' => $name]
+        );
 
         return response()->json($origin, 201);
     }
@@ -28,11 +30,21 @@ class ShipmentOriginController extends Controller
     public function update(Request $request, ShipmentOrigin $origin)
     {
         $validated = $request->validate([
-            'name' => 'required|string|unique:shipment_origins,name,' . $origin->id . '|max:255',
+            'name' => 'required|string|max:255',
         ]);
 
+        $name = mb_strtoupper(trim($validated['name']), 'UTF-8');
+
+        $exists = ShipmentOrigin::where('name', $name)->where('id', '!=', $origin->id)->first();
+        if ($exists) {
+            return response()->json([
+                'message' => 'El origen ya existe con este nombre.',
+                'errors' => ['name' => ['El origen ya existe con este nombre.']]
+            ], 422);
+        }
+
         $origin->update([
-            'name' => strtoupper($validated['name']),
+            'name' => $name,
         ]);
 
         return response()->json($origin);

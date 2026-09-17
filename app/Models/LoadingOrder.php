@@ -62,6 +62,11 @@ class LoadingOrder extends Model
         return $this->hasOne(WeightTicket::class);
     }
 
+    public function lot()
+    {
+        return $this->belongsTo(Lot::class, 'lot_id');
+    }
+
     public function apt_scan()
     {
         return $this->hasOne(AptScan::class); // usually one per trip

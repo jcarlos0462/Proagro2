@@ -32,8 +32,29 @@ class ProductionShiftStart extends Model
         return $this->belongsTo(Lot::class);
     }
 
+    public function lots()
+    {
+        return $this->belongsToMany(Lot::class, 'production_shift_start_lot')
+            ->withPivot(['status', 'closed_at', 'closed_by']);
+    }
+
     public function activities()
     {
         return $this->hasMany(ProductionShiftActivity::class);
+    }
+
+    public function evidenceUrl(): ?string
+    {
+        if (!$this->evidence_path) {
+            return null;
+        }
+        if (str_starts_with($this->evidence_path, 'http://') || str_starts_with($this->evidence_path, 'https://') || str_starts_with($this->evidence_path, 'data:')) {
+            return $this->evidence_path;
+        }
+        $path = ltrim($this->evidence_path, '/');
+        if (str_starts_with($path, 'storage/')) {
+            $path = substr($path, 8);
+        }
+        return asset('storage/' . $path);
     }
 }

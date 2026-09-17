@@ -90,7 +90,7 @@ class SurveillanceController extends Controller
         }
 
         // Create Pending Log
-        AccessLog::create([
+        $pendingAccessLog = AccessLog::create([
             'subject_id' => $subject->id,
             'subject_type' => $type,
             'status' => 'pending',
@@ -99,7 +99,8 @@ class SurveillanceController extends Controller
 
         return response()->json([
             'message' => 'Operador agregado a la lista de pendientes.',
-            'subject' => $subject
+            'subject' => $subject,
+            'log' => $pendingAccessLog,
         ]);
     }
 

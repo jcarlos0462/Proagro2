@@ -10,10 +10,14 @@ use App\Models\VesselOperator;
 use App\Models\LoadingOrder;
 use App\Models\AptScan;
 use App\Models\WeightTicket;
+use App\Models\User;
+use App\Models\Lot;
 use Inertia\Inertia;
 use Carbon\Carbon;
 use App\Helpers\OperationalTimeHelper;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 
 class AptController extends Controller
 {
@@ -24,9 +28,798 @@ class AptController extends Controller
 
     public function production()
     {
-        return Inertia::render('APT/Production');
+        return Inertia::render('APT/Index', ['productionMode' => true]);
     }
 
+    public function productionHub()
+    {
+        return view('production.hub');
+    }
+
+    public function productionManagement(Request $request)
+    {
+        $authUser = auth()->user();
+        $isJefeOrAdmin = $this->isWarehouseChief($authUser);
+
+        if (!$isJefeOrAdmin) {
+            return redirect()->route('apt.management.activity');
+        }
+
+        if ($request->boolean('activity')) {
+            $registrationQuery = \App\Models\ProductionShiftStart::with(['user:id,name', 'lot:id,folio,plant_origin,warehouse', 'lots:id,folio,plant_origin,warehouse'])
+                ->where('shift', $request->input('shift'))
+                ->where('lot_id', $request->input('lot'));
+
+            $registration = $registrationQuery->latest('started_at')->first();
+
+            return $this->productionActivityView($registration, $request);
+        }
+
+        $users = User::with('roles')
+            ->where(function ($query) {
+                $query->where('level', 'like', '%Almac%')
+                    ->orWhere('position', 'like', '%Almac%')
+                    ->orWhereHas('roles', function ($roleQuery) {
+                        $roleQuery->where('name', 'like', '%Almac%')
+                            ->orWhere('name', 'like', '%APT%')
+                            ->orWhere('name', 'like', '%Operad%');
+                    });
+            })
+            ->where(function ($query) {
+                $query->where('is_blocked', false)->orWhereNull('is_blocked');
+            })
+            ->orderBy('name')
+            ->get(['id', 'name', 'position', 'level']);
+
+        if ($users->isEmpty()) {
+            $users = User::with('roles')
+                ->where(function ($query) {
+                    $query->where('is_blocked', false)->orWhereNull('is_blocked');
+                })
+                ->orderBy('name')
+                ->get(['id', 'name', 'position', 'level']);
+        }
+
+        $authUser = auth()->user();
+        $isJefeOrAdmin = $this->isWarehouseChief($authUser);
+        $canManageShift = (bool) $isJefeOrAdmin;
+
+        if ($isJefeOrAdmin) {
+            $lots = Lot::orderBy('created_at', 'desc')->get(['id', 'folio', 'plant_origin', 'warehouse']);
+            $latestRegistration = \App\Models\ProductionShiftStart::with(['user:id,name', 'lot:id,folio', 'lots:id,folio'])
+                ->latest('started_at')
+                ->first();
+        } else {
+            $latestRegistration = \App\Models\ProductionShiftStart::with(['user:id,name', 'lot:id,folio', 'lots:id,folio'])
+                ->where('user_id', $authUser?->id)
+                ->latest('started_at')
+                ->first();
+            $lots = $latestRegistration?->lots?->isNotEmpty()
+                ? $latestRegistration->lots
+                : collect();
+            $users = $users->where('id', $authUser?->id)->values();
+            if ($users->isEmpty() && $authUser) {
+                $users = collect([$authUser]);
+            }
+        }
+
+        return view('production.management', compact('users', 'lots', 'latestRegistration', 'canManageShift'));
+    }
+
+    public function storeProductionShiftStart(Request $request)
+    {
+        $authUser = auth()->user();
+        $isJefeOrAdmin = $this->isWarehouseChief($authUser);
+
+        if (!$isJefeOrAdmin) {
+            return response()->json([
+                'message' => 'Solo el Jefe de Almacén tiene autorización para iniciar o modificar la generación de lote.',
+                'errors' => ['role' => ['Solo el Jefe de Almacén tiene autorización para iniciar o modificar la generación de lote.']]
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'user_id' => 'required|exists:users,id',
+            'position' => 'required|string|max:100',
+            'shift' => 'required|string|in:Turno 1,Turno 2,Turno 3,Turno 1A,Turno 1B',
+            'lot_id' => 'nullable|exists:lots,id',
+            'lot_ids' => 'required|array|min:1',
+            'lot_ids.*' => 'exists:lots,id',
+            'evidence' => 'nullable|image|mimes:jpeg,jpg,png,webp|max:5120',
+        ]);
+
+        $selectedLotIds = array_values(array_unique($validated['lot_ids']));
+
+        // Check if user currently has any of the selected lots open (based on the latest assignment of each lot)
+        $latestAssignments = DB::table('production_shift_start_lot as assignment')
+            ->join('production_shift_starts as shift_start', 'shift_start.id', '=', 'assignment.production_shift_start_id')
+            ->join('lots', 'lots.id', '=', 'assignment.lot_id')
+            ->where('shift_start.user_id', $validated['user_id'])
+            ->whereIn('assignment.lot_id', $selectedLotIds)
+            ->select([
+                'assignment.lot_id',
+                'lots.folio',
+                'assignment.status',
+                'assignment.closed_at',
+                'shift_start.started_at',
+            ])
+            ->orderByDesc('shift_start.started_at')
+            ->get()
+            ->groupBy('lot_id')
+            ->map(fn ($group) => $group->first());
+
+        $alreadyAssignedFolios = $latestAssignments
+            ->filter(fn ($assignment) => $assignment->status !== 'closed' && is_null($assignment->closed_at))
+            ->pluck('folio')
+            ->unique()
+            ->values();
+
+        if ($alreadyAssignedFolios->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'lot_ids' => 'El usuario ya tiene asignado el lote: ' . $alreadyAssignedFolios->implode(', ') . '. Cierra ese lote antes de volver a asignarlo.',
+            ]);
+        }
+
+        if (count($selectedLotIds) !== count($validated['lot_ids'])) {
+            throw ValidationException::withMessages([
+                'lot_ids' => 'No puedes seleccionar el mismo lote más de una vez en la misma asignación.',
+            ]);
+        }
+
+        $evidencePath = $request->hasFile('evidence')
+            ? $request->file('evidence')->store('production-shifts', 'public')
+            : null;
+
+        $selectedUser = User::with('roles')->findOrFail($validated['user_id']);
+        $position = $selectedUser->position ?: ($selectedUser->level ?: 'Almacén');
+
+        $registration = \App\Models\ProductionShiftStart::create([
+            'user_id' => $validated['user_id'],
+            'position' => $position,
+            'started_at' => now(),
+            'shift' => $validated['shift'],
+            'lot_id' => $validated['lot_ids'][0],
+            'evidence_path' => $evidencePath,
+        ]);
+        $registration->lots()->sync($validated['lot_ids']);
+
+        if ($request->wantsJson() || $request->ajax()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Inicio de turno registrado correctamente.',
+                'redirect_url' => route('apt.management.activity', ['shift_id' => $registration->id]),
+            ]);
+        }
+
+        return redirect()->route('apt.management.activity', ['shift_id' => $registration->id])
+            ->with('production_shift_id', $registration->id)
+            ->with('success', 'Inicio de turno registrado correctamente.');
+    }
+
+    public function productionActivity(Request $request)
+    {
+        $this->ensureProductionActivityTable();
+        $authUser = auth()->user();
+        $isJefeOrAdmin = $this->isWarehouseChief($authUser);
+        $registrationQuery = \App\Models\ProductionShiftStart::with(['user:id,name', 'lot:id,folio,plant_origin,warehouse', 'lots:id,folio,plant_origin,warehouse']);
+
+        $registration = null;
+        if ($request->filled('shift_id')) {
+            $registration = (clone $registrationQuery)->find($request->input('shift_id'));
+        }
+
+        if (!$registration && session('production_shift_id')) {
+            $registration = (clone $registrationQuery)->find(session('production_shift_id'));
+        }
+
+        if (!$registration) {
+            if ($isJefeOrAdmin) {
+                $registration = (clone $registrationQuery)->latest('started_at')->first();
+            } else {
+                $registration = (clone $registrationQuery)
+                    ->where('user_id', $authUser?->id)
+                    ->whereHas('lots', function ($lotQuery) {
+                        $lotQuery->where(function ($q) {
+                            $q->where('production_shift_start_lot.status', 'open')
+                                ->orWhereNull('production_shift_start_lot.status');
+                        })->whereNull('production_shift_start_lot.closed_at');
+                    })
+                    ->latest('started_at')
+                    ->first();
+            }
+        } elseif (!$isJefeOrAdmin) {
+            if ((int) $registration->user_id !== (int) $authUser?->id) {
+                $registration = null;
+            } else {
+                $hasOpenLot = $registration->lots()->where(function ($q) {
+                    $q->where('production_shift_start_lot.status', 'open')
+                        ->orWhereNull('production_shift_start_lot.status');
+                })->whereNull('production_shift_start_lot.closed_at')->exists();
+
+                if (!$hasOpenLot) {
+                    $registration = null;
+                }
+            }
+        }
+
+        return $this->productionActivityView($registration, $request);
+    }
+
+    public function checkAssignedLots(Request $request)
+    {
+        $authUser = auth()->user();
+        if (!$authUser) {
+            return response()->json(['has_active_lots' => false]);
+        }
+
+        $activeShift = \App\Models\ProductionShiftStart::with(['lots' => function ($q) {
+            $q->where(function ($sub) {
+                $sub->where('production_shift_start_lot.status', 'open')
+                    ->orWhereNull('production_shift_start_lot.status');
+            })->whereNull('production_shift_start_lot.closed_at');
+        }])
+        ->where('user_id', $authUser->id)
+        ->whereHas('lots', function ($lotQuery) {
+            $lotQuery->where(function ($q) {
+                $q->where('production_shift_start_lot.status', 'open')
+                    ->orWhereNull('production_shift_start_lot.status');
+            })->whereNull('production_shift_start_lot.closed_at');
+        })
+        ->latest('started_at')
+        ->first();
+
+        if ($activeShift && $activeShift->lots->isNotEmpty()) {
+            $firstLot = $activeShift->lots->first();
+            return response()->json([
+                'has_active_lots' => true,
+                'shift_id' => $activeShift->id,
+                'lot_id' => $firstLot->id,
+                'redirect_url' => route('apt.management.activity', ['shift_id' => $activeShift->id, 'lot_id' => $firstLot->id]),
+            ]);
+        }
+
+        return response()->json([
+            'has_active_lots' => false,
+        ]);
+    }
+
+    public function storeProductionActivity(Request $request)
+    {
+        $this->ensureProductionActivityTable();
+        $validated = $request->validate([
+            'production_shift_start_id' => 'required|exists:production_shift_starts,id',
+            'type' => 'required|in:incidencia,relevancia',
+            'description' => 'required|string|max:5000',
+            'location' => 'nullable|string|max:120',
+            'occurred_at' => 'nullable|date_format:Y-m-d H:i:s',
+            'evidence' => 'required|image|mimes:jpeg,jpg,png,webp|max:5120',
+        ]);
+
+        $shiftStart = \App\Models\ProductionShiftStart::findOrFail($validated['production_shift_start_id']);
+        $authUser = auth()->user();
+        if (!$this->isWarehouseChief($authUser) && (int) $shiftStart->user_id !== (int) $authUser?->id && !$authUser?->can('view apt')) {
+            abort(403, 'Solo puedes registrar actividades del lote que te asignó el Jefe de Almacén.');
+        }
+
+        $evidencePath = $request->file('evidence')->store('production-activities', 'public');
+
+        \App\Models\ProductionShiftActivity::create([
+            'production_shift_start_id' => $validated['production_shift_start_id'],
+            'user_id' => auth()->id(),
+            'type' => $validated['type'],
+            'description' => $validated['description'],
+            'location' => $validated['location'] ?? null,
+            'evidence_path' => $evidencePath,
+            'occurred_at' => $validated['occurred_at'] ?? now(),
+        ]);
+
+        return back()->with('success', 'Actividad guardada correctamente.');
+    }
+
+    public function closeProductionLot(Request $request, int $shiftStart, string $lot)
+    {
+        $authUser = auth()->user();
+        if (!$this->isWarehouseChief($authUser)) {
+            abort(403, 'Solo el Jefe de Almacén puede cerrar un lote.');
+        }
+
+        $registration = \App\Models\ProductionShiftStart::findOrFail($shiftStart);
+        $lotIsAssigned = $registration->lots()->where('lots.id', $lot)->exists();
+        if (!$lotIsAssigned) {
+            abort(404, 'El lote no pertenece a esta asignación.');
+        }
+
+        $now = now();
+
+        DB::table('production_shift_start_lot as assignment')
+            ->join('production_shift_starts as shift_start', 'shift_start.id', '=', 'assignment.production_shift_start_id')
+            ->where('shift_start.user_id', $registration->user_id)
+            ->where('assignment.lot_id', $lot)
+            ->update([
+                'assignment.status' => 'closed',
+                'assignment.closed_at' => $now,
+                'assignment.closed_by' => $authUser->id,
+            ]);
+
+        DB::table('production_shift_start_lot')
+            ->where('production_shift_start_id', $registration->id)
+            ->where('lot_id', $lot)
+            ->update([
+                'status' => 'closed',
+                'closed_at' => $now,
+                'closed_by' => $authUser->id,
+            ]);
+
+        $message = 'Lote cerrado para esta asignación. Puede volver a asignarse en un nuevo ciclo.';
+        if ($request->expectsJson() || $request->ajax()) {
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'status' => 'closed',
+                'closed_at' => $now->toISOString(),
+                'closed_by_name' => $authUser->name,
+            ]);
+        }
+
+        return back()->with('success', $message);
+    }
+
+    public function reopenProductionLot(Request $request, int $shiftStart, string $lot)
+    {
+        $authUser = auth()->user();
+        if (!$this->isWarehouseChief($authUser)) {
+            abort(403, 'Solo el Jefe de Almacén puede reabrir un lote.');
+        }
+
+        $registration = \App\Models\ProductionShiftStart::findOrFail($shiftStart);
+        $lotIsAssigned = $registration->lots()->where('lots.id', $lot)->exists();
+        if (!$lotIsAssigned) {
+            abort(404, 'El lote no pertenece a esta asignación.');
+        }
+
+        DB::table('production_shift_start_lot')
+            ->where('production_shift_start_id', $registration->id)
+            ->where('lot_id', $lot)
+            ->update([
+                'status' => 'open',
+                'closed_at' => null,
+                'closed_by' => null,
+            ]);
+
+        $message = 'Lote reabierto para esta asignación.';
+        if ($request->expectsJson() || $request->ajax()) {
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'status' => 'open',
+                'closed_at' => null,
+                'closed_by_name' => null,
+            ]);
+        }
+
+        return back()->with('success', $message);
+    }
+
+    private function isWarehouseChief($user): bool
+    {
+        return (bool) ($user && ($user->hasRole('Jefe de Almacen') || $user->hasRole('Jefe de Almacén') || $user->hasRole('Admin') || ($user->is_admin ?? false)));
+    }
+
+    private function productionActivityView(?\App\Models\ProductionShiftStart $registration, Request $request)
+    {
+        $this->ensureProductionActivityTable();
+        $activityType = $request->input('activity_type', 'all');
+        $activityDate = $request->input('activity_date');
+        $selectedLotId = $request->input('lot_id');
+
+        if (!$selectedLotId && $registration) {
+            $selectedLots = ($registration->lots->isNotEmpty() ? $registration->lots : collect([$registration->lot]))
+                ->filter()
+                ->sortBy(fn ($lot) => (string) $lot->folio)
+                ->values();
+
+            if ($selectedLots->count() === 1) {
+                $selectedLotId = $selectedLots->first()?->id;
+            }
+        }
+
+        if (!$selectedLotId) {
+            $activities = collect();
+            $canCloseLot = $this->isWarehouseChief(auth()->user());
+            return view('production.activity', compact('registration', 'activities', 'activityType', 'activityDate', 'selectedLotId', 'canCloseLot'));
+        }
+
+        $activitiesQuery = \App\Models\ProductionShiftActivity::with(['user:id,name', 'shiftStart.lot', 'shiftStart.lots']);
+
+        $activitiesQuery->whereHas('shiftStart', function ($query) use ($selectedLotId) {
+            $query->where('lot_id', $selectedLotId)
+                ->orWhereHas('lots', function ($lotQuery) use ($selectedLotId) {
+                    $lotQuery->where('lots.id', $selectedLotId);
+                });
+        });
+
+        if (in_array($activityType, ['incidencia', 'relevancia'], true)) {
+            $activitiesQuery->where('type', $activityType);
+        }
+
+        if ($activityDate) {
+            $activitiesQuery->whereDate('occurred_at', $activityDate);
+        }
+
+        $activities = $activitiesQuery->latest('occurred_at')->get();
+        $canCloseLot = $this->isWarehouseChief(auth()->user());
+
+        return view('production.activity', compact('registration', 'activities', 'activityType', 'activityDate', 'selectedLotId', 'canCloseLot'));
+    }
+
+    public function printProductionActivityReport(Request $request)
+    {
+        $this->ensureProductionActivityTable();
+        $authUser = auth()->user();
+        $registrationQuery = \App\Models\ProductionShiftStart::with(['user:id,name', 'lot:id,folio,plant_origin,warehouse', 'lots:id,folio,plant_origin,warehouse']);
+
+        $registration = null;
+        if ($request->filled('shift_id')) {
+            $registration = (clone $registrationQuery)->find($request->input('shift_id'));
+        }
+        if (!$registration) {
+            $isJefeOrAdmin = $this->isWarehouseChief($authUser);
+            if ($isJefeOrAdmin) {
+                $registration = (clone $registrationQuery)->latest('started_at')->first();
+            } else {
+                $userShift = (clone $registrationQuery)->where('user_id', $authUser?->id)->latest('started_at')->first();
+                $registration = $userShift ?: (clone $registrationQuery)->latest('started_at')->first();
+            }
+        }
+
+        $activityType = $request->input('activity_type', 'all');
+        $activityDate = $request->input('activity_date');
+        $selectedLotId = $request->input('lot_id');
+
+        $activitiesQuery = \App\Models\ProductionShiftActivity::with(['user:id,name', 'shiftStart.lot', 'shiftStart.lots']);
+
+        if ($selectedLotId) {
+            $activitiesQuery->whereHas('shiftStart', function ($query) use ($selectedLotId) {
+                $query->where('lot_id', $selectedLotId)
+                    ->orWhereHas('lots', function ($lotQuery) use ($selectedLotId) {
+                        $lotQuery->where('lots.id', $selectedLotId);
+                    });
+            });
+        }
+
+        if (in_array($activityType, ['incidencia', 'relevancia'], true)) {
+            $activitiesQuery->where('type', $activityType);
+        }
+
+        if ($activityDate) {
+            $activitiesQuery->whereDate('occurred_at', $activityDate);
+        }
+
+        $activities = $activitiesQuery->latest('occurred_at')->get();
+
+        return view('production.print-activity-report', compact('registration', 'activities', 'activityType', 'activityDate'));
+    }
+
+    public function lotsReport(Request $request)
+    {
+        $this->ensureProductionActivityTable();
+        $lots = Lot::orderBy('folio')->get(['id', 'folio']);
+
+        $rawLotIds = $request->input('lot_ids', $request->input('lot_id'));
+        $lotIds = [];
+        if (is_array($rawLotIds)) {
+            $lotIds = array_values(array_filter($rawLotIds, fn($v) => $v !== 'all' && !empty($v)));
+        } elseif (is_string($rawLotIds) && $rawLotIds !== 'all' && !empty($rawLotIds)) {
+            $lotIds = array_values(array_filter(explode(',', $rawLotIds)));
+        }
+
+        $shiftFilter = $request->input('shift', 'all');
+        $dateFrom = $request->input('date_from');
+        $dateTo = $request->input('date_to');
+
+        $hasFilters = !empty($lotIds)
+            || ($request->filled('shift') && $shiftFilter !== 'all')
+            || $request->filled('date_from')
+            || $request->filled('date_to');
+
+        $query = \App\Models\ProductionShiftActivity::with(['user:id,name', 'shiftStart.lot', 'shiftStart.user']);
+
+        if (!empty($lotIds)) {
+            $query->whereHas('shiftStart', function ($q) use ($lotIds) {
+                $q->whereIn('lot_id', $lotIds)
+                    ->orWhereHas('lots', function ($lotQuery) use ($lotIds) {
+                        $lotQuery->whereIn('lots.id', $lotIds);
+                    });
+            });
+        }
+        if ($request->filled('shift') && $shiftFilter !== 'all') {
+            $query->whereHas('shiftStart', function ($q) use ($shiftFilter) {
+                $q->where('shift', $shiftFilter);
+            });
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('occurred_at', '>=', $dateFrom);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('occurred_at', '<=', $dateTo);
+        }
+
+        $activities = $hasFilters ? $query->orderBy('occurred_at', 'desc')->get() : collect();
+
+        return view('production.lots-report', compact('activities', 'lots', 'lotIds', 'shiftFilter', 'dateFrom', 'dateTo', 'hasFilters'));
+    }
+
+    public function assignmentsReport(Request $request)
+    {
+        $status = $request->input('status', 'all');
+        $search = trim((string) $request->input('search', ''));
+
+        $query = DB::table('production_shift_start_lot as assignment')
+            ->join('production_shift_starts as shift_start', 'shift_start.id', '=', 'assignment.production_shift_start_id')
+            ->join('users', 'users.id', '=', 'shift_start.user_id')
+            ->join('lots', 'lots.id', '=', 'assignment.lot_id')
+            ->leftJoin('users as closed_users', 'closed_users.id', '=', 'assignment.closed_by')
+            ->select([
+                'assignment.production_shift_start_id',
+                'assignment.lot_id',
+                DB::raw("CASE WHEN assignment.status = 'closed' OR assignment.closed_at IS NOT NULL THEN 'closed' ELSE 'open' END as status"),
+                'assignment.closed_at',
+                'shift_start.started_at',
+                'shift_start.shift',
+                'users.name as user_name',
+                'lots.folio',
+                'lots.warehouse',
+                'closed_users.name as closed_by_name',
+            ])
+            ->when(in_array($status, ['open', 'closed'], true), fn ($q) => $q->where('assignment.status', $status))
+            ->when($search !== '', function ($q) use ($search) {
+                $q->where(function ($searchQuery) use ($search) {
+                    $searchQuery->where('users.name', 'like', "%{$search}%")
+                        ->orWhere('lots.folio', 'like', "%{$search}%")
+                        ->orWhere('shift_start.shift', 'like', "%{$search}%");
+                });
+            })
+            ->orderBy('users.name')
+            ->orderByDesc('shift_start.started_at')
+            ->orderBy('lots.folio');
+
+        $assignments = $query->get();
+        $userAssignments = $assignments
+            ->groupBy('user_name')
+            ->map(function ($userLots, $userName) {
+                $orderedLots = $userLots->sortByDesc('started_at')->values();
+
+                return [
+                    'user_name' => $userName,
+                    'latest_started_at' => $orderedLots->first()?->started_at,
+                    'lots' => $orderedLots,
+                ];
+            })
+            ->sortByDesc('latest_started_at')
+            ->values();
+        $summary = [
+            'users' => $userAssignments->count(),
+            'total' => $assignments->count(),
+            'open' => $assignments->where('status', 'open')->count(),
+            'closed' => $assignments->where('status', 'closed')->count(),
+        ];
+
+        return view('production.assignments-report', compact('userAssignments', 'summary', 'status', 'search'));
+    }
+
+    public function assignmentsControl(Request $request)
+    {
+        $authUser = auth()->user();
+        if (!$this->isWarehouseChief($authUser)) {
+            abort(403, 'Solo el Jefe de Almacén o Administrador puede acceder al control de asignaciones.');
+        }
+
+        $statusFilter = $request->input('status', 'all');
+        $search = trim((string) $request->input('search', ''));
+
+        $query = DB::table('production_shift_start_lot as assignment')
+            ->join('production_shift_starts as shift_start', 'shift_start.id', '=', 'assignment.production_shift_start_id')
+            ->join('users', 'users.id', '=', 'shift_start.user_id')
+            ->join('lots', 'lots.id', '=', 'assignment.lot_id')
+            ->leftJoin('users as closed_users', 'closed_users.id', '=', 'assignment.closed_by')
+            ->select([
+                'assignment.production_shift_start_id',
+                'assignment.lot_id',
+                DB::raw("CASE WHEN assignment.status = 'closed' OR assignment.closed_at IS NOT NULL THEN 'closed' ELSE 'open' END as status"),
+                'assignment.closed_at',
+                'shift_start.started_at',
+                'shift_start.shift',
+                'users.id as user_id',
+                'users.name as user_name',
+                'lots.folio as lot_folio',
+                'lots.warehouse',
+                'lots.plant_origin',
+                'closed_users.name as closed_by_name',
+            ])
+            ->whereNotNull('lots.folio')
+            ->whereRaw("UPPER(TRIM(lots.folio)) NOT IN ('ABIERTO', 'CERRADO')");
+
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('users.name', 'like', "%{$search}%")
+                    ->orWhere('lots.folio', 'like', "%{$search}%")
+                    ->orWhere('shift_start.shift', 'like', "%{$search}%")
+                    ->orWhere('lots.warehouse', 'like', "%{$search}%");
+            });
+        }
+
+        if (in_array($statusFilter, ['open', 'closed'], true)) {
+            if ($statusFilter === 'closed') {
+                $query->where(function ($q) {
+                    $q->where('assignment.status', 'closed')
+                        ->orWhereNotNull('assignment.closed_at');
+                });
+            } else {
+                $query->where(function ($q) {
+                    $q->where('assignment.status', 'open')
+                        ->orWhereNull('assignment.status');
+                })->whereNull('assignment.closed_at');
+            }
+        }
+
+        $query->orderBy('users.name')
+            ->orderByDesc('shift_start.started_at')
+            ->orderBy('lots.folio');
+
+        $rawAssignments = $query->get();
+
+        $assignments = $rawAssignments
+            ->groupBy('user_name')
+            ->map(function ($userLots, $userName) {
+                $latestByLot = $userLots
+                    ->sortByDesc('started_at')
+                    ->unique('lot_id')
+                    ->values();
+
+                $sortedLots = $latestByLot->sort(function ($a, $b) {
+                    if ($a->status !== $b->status) {
+                        return $a->status === 'open' ? -1 : 1;
+                    }
+                    return strcmp((string) $b->started_at, (string) $a->started_at);
+                })->values();
+
+                return [
+                    'user_name' => $userName,
+                    'lots' => $sortedLots,
+                    'has_open' => $sortedLots->contains(fn ($l) => $l->status === 'open'),
+                ];
+            })
+            ->sort(function ($a, $b) {
+                if ($a['has_open'] !== $b['has_open']) {
+                    return $a['has_open'] ? -1 : 1;
+                }
+                $aTime = $a['lots']->first()?->started_at ?? '';
+                $bTime = $b['lots']->first()?->started_at ?? '';
+                return strcmp((string) $bTime, (string) $aTime);
+            })
+            ->values();
+
+        $allAssignedLots = $assignments->flatMap(fn ($a) => $a['lots']);
+        $summary = [
+            'users' => $assignments->count(),
+            'total' => $allAssignedLots->count(),
+            'open' => $allAssignedLots->where('status', 'open')->count(),
+            'closed' => $allAssignedLots->where('status', 'closed')->count(),
+        ];
+
+        return view('production.assignments-control', compact('assignments', 'statusFilter', 'search', 'summary'));
+    }
+
+    public function printLotsReport(Request $request)
+    {
+        $this->ensureProductionActivityTable();
+        $rawLotIds = $request->input('lot_ids', $request->input('lot_id'));
+        $lotIds = [];
+        if (is_array($rawLotIds)) {
+            $lotIds = array_values(array_filter($rawLotIds, fn($v) => $v !== 'all' && !empty($v)));
+        } elseif (is_string($rawLotIds) && $rawLotIds !== 'all' && !empty($rawLotIds)) {
+            $lotIds = array_values(array_filter(explode(',', $rawLotIds)));
+        }
+
+        $shiftFilter = $request->input('shift', 'all');
+        $dateFrom = $request->input('date_from');
+        $dateTo = $request->input('date_to');
+
+        $query = \App\Models\ProductionShiftActivity::with(['user:id,name', 'shiftStart.lot', 'shiftStart.user']);
+
+        $selectedLots = collect();
+        if (!empty($lotIds)) {
+            $query->whereHas('shiftStart', function ($q) use ($lotIds) {
+                $q->whereIn('lot_id', $lotIds)
+                    ->orWhereHas('lots', function ($lotQuery) use ($lotIds) {
+                        $lotQuery->whereIn('lots.id', $lotIds);
+                    });
+            });
+            $selectedLots = Lot::whereIn('id', $lotIds)->get();
+        }
+        if ($request->filled('shift') && $shiftFilter !== 'all') {
+            $query->whereHas('shiftStart', function ($q) use ($shiftFilter) {
+                $q->where('shift', $shiftFilter);
+            });
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('occurred_at', '>=', $dateFrom);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('occurred_at', '<=', $dateTo);
+        }
+
+        $activities = $query->orderBy('occurred_at', 'desc')->get();
+
+        return view('production.print-lots-report', compact('activities', 'selectedLots', 'lotIds', 'shiftFilter', 'dateFrom', 'dateTo'));
+    }
+
+    public function exportLotsReport(Request $request)
+    {
+        $this->ensureProductionActivityTable();
+        $rawLotIds = $request->input('lot_ids', $request->input('lot_id'));
+        $lotIds = [];
+        if (is_array($rawLotIds)) {
+            $lotIds = array_values(array_filter($rawLotIds, fn($v) => $v !== 'all' && !empty($v)));
+        } elseif (is_string($rawLotIds) && $rawLotIds !== 'all' && !empty($rawLotIds)) {
+            $lotIds = array_values(array_filter(explode(',', $rawLotIds)));
+        }
+
+        $shiftFilter = $request->input('shift', 'all');
+        $dateFrom = $request->input('date_from');
+        $dateTo = $request->input('date_to');
+
+        $query = \App\Models\ProductionShiftActivity::with(['user:id,name', 'shiftStart.lot', 'shiftStart.user']);
+
+        if (!empty($lotIds)) {
+            $query->whereHas('shiftStart', function ($q) use ($lotIds) {
+                $q->whereIn('lot_id', $lotIds)
+                    ->orWhereHas('lots', function ($lotQuery) use ($lotIds) {
+                        $lotQuery->whereIn('lots.id', $lotIds);
+                    });
+            });
+        }
+        if ($request->filled('shift') && $shiftFilter !== 'all') {
+            $query->whereHas('shiftStart', function ($q) use ($shiftFilter) {
+                $q->where('shift', $shiftFilter);
+            });
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('occurred_at', '>=', $dateFrom);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('occurred_at', '<=', $dateTo);
+        }
+
+        $activities = $query->orderBy('occurred_at', 'desc')->get();
+
+        $filename = 'reporte_lotes_' . date('Ymd_His') . '.xlsx';
+
+        return \Maatwebsite\Excel\Facades\Excel::download(
+            new \App\Exports\ProductionLotsExport($activities),
+            $filename
+        );
+    }
+
+    private function ensureProductionActivityTable(): void
+    {
+        if (Schema::hasTable('production_shift_activities')) {
+            return;
+        }
+
+        Schema::create('production_shift_activities', function ($table) {
+            $table->id();
+            $table->foreignId('production_shift_start_id')->constrained('production_shift_starts')->cascadeOnDelete();
+            $table->foreignId('user_id')->constrained('users');
+            $table->string('type', 20);
+            $table->text('description');
+            $table->string('location')->nullable();
+            $table->string('evidence_path')->nullable();
+            $table->dateTime('occurred_at');
+            $table->timestamps();
+            $table->index(['production_shift_start_id', 'occurred_at'], 'psa_shift_time_idx');
+        });
+    }
     // Operator Registration
     public function createOperator()
     {
@@ -408,6 +1201,10 @@ class AptController extends Controller
 
     public function scanner(Request $request)
     {
+        if ($request->input('from') === 'production') {
+            return redirect()->route('apt.management.activity');
+        }
+
         // Filters for active and historical vessel movements
         $filters = $request->only(['date', 'vessel_id']);
         $now = now();

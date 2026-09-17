@@ -7,10 +7,18 @@ use App\Models\Client;
 use App\Models\Product;
 use App\Models\Vessel;
 use App\Models\VesselOperator;
+use App\Models\AccessLog;
+use App\Models\Lot;
 use App\Models\SalesOrder;
 use App\Models\ShipmentDestination;
+use App\Models\ShipmentOrigin;
+use App\Models\AptAttendance;
+use App\Models\LoadingAssistant;
 use App\Models\User;
+use App\Models\WeightTicket;
 use Illuminate\Http\Request;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 use SimpleSoftwareIO\QrCode\Facades\QrCode;
 use App\Helpers\OperationalTimeHelper;
@@ -43,6 +51,8 @@ class DocumentationController extends Controller
                 ];
             }),
             'products' => Product::all(),
+            'origins' => ShipmentOrigin::orderBy('name')->get(['id', 'name']),
+            'destinations' => ShipmentDestination::orderBy('name')->get(['id', 'name']),
             'sales_orders' => SalesOrder::with(['client', 'product', 'vessel'])
                 ->whereIn('status', ['created', 'open'])
                 ->get(),
@@ -285,6 +295,11 @@ class DocumentationController extends Controller
             ->limit(20)
             ->get()
             ->map(function ($op) {
+                $lastAccessStatus = AccessLog::where('subject_id', $op->id)
+                    ->where('subject_type', \App\Models\ExitOperator::class)
+                    ->latest('created_at')
+                    ->value('status');
+
                 return [
                     'id' => $op->id,
                     'operator_name' => $op->name,
@@ -295,6 +310,7 @@ class DocumentationController extends Controller
                     'economic_number' => $op->economic_number,
                     'license' => $op->license,
                     'brand_model' => $op->brand_model,
+                    'access_denied' => $lastAccessStatus === 'rejected',
                 ];
             });
 
@@ -648,6 +664,8 @@ class DocumentationController extends Controller
                 ->orWhere('id', $order->sales_order_id)
                 ->with(['client', 'product'])
                 ->get(),
+            'origins' => ShipmentOrigin::orderBy('name')->get(['id', 'name']),
+            'destinations' => ShipmentDestination::orderBy('name')->get(['id', 'name']),
             'scale_operators' => User::role('Bascula')->where('is_blocked', false)->get()->map(function ($user) {
                 return [
                     'id' => $user->id,
@@ -857,35 +875,10 @@ class DocumentationController extends Controller
 
         // Validate Balance before reopening
         $salesOrder = SalesOrder::findOrFail($order->sales_order_id);
-
-        // Calculate tons needed (Envasado = programmed, Granel = programmed / 1000)
-        // Wait, current logic for Envasado uses programmed_tons directly (stored as tons presumably? Or KG?)
-        // Let's check how it's stored. In SalesOrder.php:
-        // Envasado -> sum('programmed_tons')
-        // Granel -> sum('programmed_tons') / 1000
-
-        // So we need to match that logic here.
-        $neededTons = 0;
-        if ($order->presentation === 'GRANEL') {
-            $neededTons = ($order->programmed_tons ?: 0) / 1000;
-        } else {
-            // For Envasado, programmed_tons is typically stored in Tons if entered as Tons in UI?
-            // Checking Create.tsx/Controller: 'programmed_tons' => 'nullable|numeric'
-            // If user entering 4000 for Granel implies KG, does user enter 4000 for Envasado implying KG too?
-            // Looking at SalesOrder.php line 46: ->sum('programmed_tons'). It adds it DIRECTLY.
-            // But for Granel line 65: ->programmed_tons / 1000.
-            // This implies Envasado is stored under different unit convention or logic?
-            // Let's assume consistent with SalesOrder logic:
-            $neededTons = $order->programmed_tons;
-        }
-
-        // Wait, if Envasado is adding directly, and Balance = Total - Loaded.
-        // If Total is 5000 (Tons) and Envasado programmed is 10 (Sacks? Tons?).
-        // If Envasado programmed_tons is entered as 1 (Ton), then 5000 - 1 = 4999. Correct.
-        // If Granel programmed_tons is entered as 1000 (KG), then 1000 / 1000 = 1 Ton. Correct.
+        $neededTons = (float) ($order->programmed_tons ?? 0);
 
         if ($salesOrder->balance < $neededTons) {
-            return back()->withErrors(['error' => 'Saldo insuficiente en la Orden de Venta para re-abrir esta orden. Requerido: ' . $neededTons . ' Toneladas. Disponible: ' . $salesOrder->balance]);
+            return back()->withErrors(['error' => 'Saldo insuficiente en la Orden de Venta para re-abrir esta orden. Requerido: ' . $neededTons . ' Toneladas. Disponible: ' . $salesOrder->balance . ' TM']);
         }
 
         $order->update(['status' => 'created']);
@@ -939,6 +932,12 @@ class DocumentationController extends Controller
         $clientId = $request->input('client_id', '');
         $productId = $request->input('product_id', '');
         $module = $request->input('module');
+        $from = $request->input('from');
+
+        // Keep the legacy production tracker URL on the production activity view.
+        if ($module === 'apt' && $from === 'production') {
+            return redirect()->route('apt.management.activity');
+        }
 
         // Auto-detect module from route name if not explicitly provided
         if (!$module) {
@@ -962,39 +961,23 @@ class DocumentationController extends Controller
                 'client',
                 'sales_order',
                 'items.product',
-                'weight_ticket',
-                'loadingOrders.weight_ticket',
+                'weight_ticket.lot',
+                'lot',
+                'loadingOrders.weight_ticket.lot',
+                'loadingOrders.lot',
             ])
             ->whereNotIn('status', ['cancelled'])
-            ->where(function ($q) use ($startRange, $endRange) {
-                // CASE 1: PENDING (Always visible)
-                // Not 'completed' AND doesn't have a finished weigh-out
-                $q->where(function ($qPending) {
-                    $qPending->where('status', '!=', 'completed')
-                        ->whereDoesntHave('weight_ticket', fn($w) => $w->whereNotNull('weigh_out_at'))
-                        ->whereDoesntHave('loadingOrders.weight_ticket', fn($w) => $w->whereNotNull('weigh_out_at'));
-                })
-                // CASE 2: COMPLETED (Only current operational turno)
-                // Is 'completed' OR has a finished weigh-out
-                ->orWhere(function ($qCompleted) use ($startRange, $endRange) {
-                    $qCompleted->where(function ($qDone) {
-                        $qDone->where('status', 'completed')
-                            ->orWhereHas('weight_ticket', fn($w) => $w->whereNotNull('weigh_out_at'))
-                            ->orWhereHas('loadingOrders.weight_ticket', fn($w) => $w->whereNotNull('weigh_out_at'));
-                    })
-                    ->where(function ($qDate) use ($startRange, $endRange) {
-                        // Must have finished within the operational range
-                        $qDate->whereBetween('updated_at', [$startRange, $endRange])
-                            ->orWhereHas('weight_ticket', fn($w) => $w->whereBetween('weigh_out_at', [$startRange, $endRange]))
-                            ->orWhereHas('loadingOrders.weight_ticket', fn($w) => $w->whereBetween('weigh_out_at', [$startRange, $endRange]));
-                    });
-                });
+            ->where(function ($q) {
+                // Only pending orders remain visible in the global OE tracker.
+                $q->where('status', '!=', 'completed')
+                    ->whereDoesntHave('weight_ticket', fn($w) => $w->whereNotNull('weigh_out_at'))
+                    ->whereDoesntHave('loadingOrders.weight_ticket', fn($w) => $w->whereNotNull('weigh_out_at'));
             });
 
         $inPlant = $request->input('in_plant', 'all');
 
         // Apply "En Planta" filter
-        if ($inPlant === 'si') {
+        if ($inPlant === 'si' || $inPlant === 'yes') {
             $baseQuery->where(function ($q) {
                 $q->whereHas('weight_ticket', fn($w) => $w->where('weighing_status', '!=', 'cancelled'))
                     ->orWhereHas('loadingOrders.weight_ticket', fn($w) => $w->where('weighing_status', '!=', 'cancelled'))
@@ -1096,10 +1079,25 @@ class DocumentationController extends Controller
 
         // Helper: resolve warehouse from loading orders or OE directly
         $resolveWarehouse = function (ShipmentOrder $order): string {
-            foreach ($order->loadingOrders as $lo) {
-                if (!empty($lo->warehouse)) return $lo->warehouse;
+            if (!empty($order->warehouse) && $order->warehouse !== 'N/A') {
+                return $order->warehouse;
             }
-            return $order->warehouse ?? 'N/A';
+            if ($order->lot && !empty($order->lot->warehouse) && $order->lot->warehouse !== 'N/A') {
+                return $order->lot->warehouse;
+            }
+            if ($order->weight_ticket && !empty($order->weight_ticket->warehouse) && $order->weight_ticket->warehouse !== 'N/A') {
+                return $order->weight_ticket->warehouse;
+            }
+            if ($order->weight_ticket && $order->weight_ticket->lot && !empty($order->weight_ticket->lot->warehouse) && $order->weight_ticket->lot->warehouse !== 'N/A') {
+                return $order->weight_ticket->lot->warehouse;
+            }
+            foreach ($order->loadingOrders as $lo) {
+                if (!empty($lo->warehouse) && $lo->warehouse !== 'N/A') return $lo->warehouse;
+                if ($lo->lot && !empty($lo->lot->warehouse) && $lo->lot->warehouse !== 'N/A') return $lo->lot->warehouse;
+                if ($lo->weight_ticket && !empty($lo->weight_ticket->warehouse) && $lo->weight_ticket->warehouse !== 'N/A') return $lo->weight_ticket->warehouse;
+                if ($lo->weight_ticket && $lo->weight_ticket->lot && !empty($lo->weight_ticket->lot->warehouse) && $lo->weight_ticket->lot->warehouse !== 'N/A') return $lo->weight_ticket->lot->warehouse;
+            }
+            return 'N/A';
         };
 
         // Helper: compute status and timing for ticket
@@ -1129,9 +1127,63 @@ class DocumentationController extends Controller
             ];
         };
 
+        // Helper: resolve real-time process status
+        $resolveProcessStatus = function (ShipmentOrder $order, $timing, $ticket, $inPlant, $warehouse) {
+            $isCompleted = !$timing['is_pending'];
+
+            if ($isCompleted) {
+                return [
+                    'stage' => 'completed',
+                    'label' => 'Destarado',
+                    'detail' => 'Completada: Pesaje de salida registrado.',
+                    'color' => 'emerald',
+                ];
+            }
+
+            if (!$inPlant) {
+                return [
+                    'stage' => 'pending_entry',
+                    'label' => 'Por Ingresar',
+                    'detail' => 'Pendiente de ingresar a báscula para pesaje de tara.',
+                    'color' => 'red',
+                ];
+            }
+
+            // In Plant cases
+            $hasLoadedFinished = !empty($order->loading_finished_at) || $order->status === 'loaded';
+            $isLoading = ($order->status === 'loading' || !empty($order->loaded_at) || !empty($order->lot_id)) && !$hasLoadedFinished;
+
+            if ($hasLoadedFinished) {
+                $whLabel = ($warehouse !== 'N/A') ? " ({$warehouse})" : "";
+                return [
+                    'stage' => 'loaded',
+                    'label' => 'Cargado' . $whLabel,
+                    'detail' => 'Carga completada' . ($warehouse !== 'N/A' ? " en {$warehouse}" : "") . '. Esperando pesaje de salida (destare).',
+                    'color' => 'blue',
+                ];
+            }
+
+            if ($isLoading) {
+                $whLabel = ($warehouse !== 'N/A') ? " ({$warehouse})" : "";
+                return [
+                    'stage' => 'loading',
+                    'label' => 'Cargando' . $whLabel,
+                    'detail' => 'En proceso de carga' . ($warehouse !== 'N/A' ? " en {$warehouse}" : "") . '.',
+                    'color' => 'indigo',
+                ];
+            }
+
+            return [
+                'stage' => 'in_plant',
+                'label' => 'En Planta (Espera)',
+                'detail' => 'Tara registrada en báscula. Esperando asignación de almacén o inicio de carga.',
+                'color' => 'amber',
+            ];
+        };
+
         // Map a single order to the row format
         $mapOrder = function (ShipmentOrder $order, int $index, $activeCompanions = []) use (
-            $resolveProduct, $resolveTicket, $resolveWarehouse, $computeStatus
+            $resolveProduct, $resolveTicket, $resolveWarehouse, $computeStatus, $resolveProcessStatus
         ) {
             $timing = $computeStatus($order);
             $ticket = $resolveTicket($order);
@@ -1143,11 +1195,13 @@ class DocumentationController extends Controller
             }
 
             // EN PLANTA resolution:
-            // SÍ if it has a ticket OR if it is a companion of an active ticket
+            // SÍ if it has a ticket OR if it is a companion of an active ticket OR if it has loaded/lot in APT
             $inPlant = false;
             if ($ticket && $ticket->weighing_status !== 'cancelled') {
                 $inPlant = true;
             } elseif (in_array($order->id, $activeCompanions)) {
+                $inPlant = true;
+            } elseif (!empty($order->loaded_at) || !empty($order->lot_id) || $order->status === 'loading' || !empty($order->loading_finished_at)) {
                 $inPlant = true;
             }
 
@@ -1156,6 +1210,9 @@ class DocumentationController extends Controller
                 $partLabel = $ticket->full_part === 'primera' ? '1ra Parte' : '2da Parte';
                 $unitType .= " ({$partLabel})";
             }
+
+            $wh = $resolveWarehouse($order);
+            $processStatus = $resolveProcessStatus($order, $timing, $ticket, $inPlant, $wh);
 
             return [
                 'id'                => $order->id,
@@ -1166,7 +1223,7 @@ class DocumentationController extends Controller
                 'unit_type'         => $unitType,
                 'transport_company' => $order->transport_company ?? 'N/A',
                 'client'            => $order->client?->business_name ?? 'N/A',
-                'warehouse'         => $resolveWarehouse($order),
+                'warehouse'         => $wh,
                 'product'           => $resolveProduct($order),
                 'presentation'      => $order->presentation ?? 'N/A',
                 'programmed_tons'   => (float) ($order->programmed_tons ?? 0),
@@ -1176,6 +1233,7 @@ class DocumentationController extends Controller
                 'status'            => $order->status,
                 'ticket_status'     => $ticketStatus,
                 'in_plant'          => $inPlant,
+                'process_status'    => $processStatus,
             ];
         };
 
@@ -1269,7 +1327,29 @@ class DocumentationController extends Controller
             return $collection->values()->map(fn($o, $i) => $mapOrder($o, $i, $activeCompanions));
         };
 
+        $lots = Lot::where('status', 'open')->orderBy('folio')->get(['id', 'folio', 'warehouse'])->map(function ($lot) {
+            return [
+                'id' => $lot->id,
+                'folio' => $this->normalizeLotLabel($lot->folio),
+                'warehouse' => $lot->warehouse,
+            ];
+        })->values();
+
+        $this->ensureLoadingAssistantTables();
+        $loadingHistory = $this->getLoadingHistory();
+        $loadingAssistants = LoadingAssistant::orderBy('name')->get(['id', 'name']);
+        $squadLeaders = $this->personalAgroindustrySquadLeaders()
+            ->values()
+            ->map(fn (string $name, int $index) => [
+                'id' => $index + 1,
+                'name' => $name,
+            ]);
+
         return Inertia::render('Documentation/OeTracker/Index', [
+            'lots'          => $lots,
+            'loadingHistory' => $loadingHistory,
+            'squadLeaders'  => $squadLeaders,
+            'loadingAssistants' => $loadingAssistants,
             'envasado'      => $prepareGroup($envasado),
             'granel'        => $prepareGroup($granel),
             'saderEnvasado' => $prepareGroup($saderEnvasado),
@@ -1278,6 +1358,7 @@ class DocumentationController extends Controller
             'filters'  => [
                 'search' => $search,
                 'module' => $module,
+                'from' => $from,
                 'in_plant' => $inPlant,
                 'client_id' => $clientId,
                 'product_id' => $productId,
@@ -1292,6 +1373,291 @@ class DocumentationController extends Controller
             'clients'               => [], // No longer used as primary
             'products'              => [], // No longer used as primary
         ]);
+    }
+
+    private function normalizeLotLabel(?string $folio): string
+    {
+        if (empty($folio)) {
+            return '';
+        }
+
+        $cleaned = trim($folio);
+        $cleaned = preg_replace('/\s*(?:[•·|]|[-–])\s*(?:Almacen|Almacén)\b.*$/i', '', $cleaned);
+        $cleaned = preg_replace('/\s+\((?:Almacen|Almacén)\b.*\)$/i', '', $cleaned);
+        $cleaned = preg_replace('/\s+(?:Almacen|Almacén)\s*\d*\s*$/i', '', $cleaned);
+
+        return trim((string) $cleaned);
+    }
+
+    public function searchQr(Request $request)
+    {
+        $rawQr = trim((string) $request->input('qr'));
+        $folio = strtoupper($rawQr);
+
+        if (filter_var($rawQr, FILTER_VALIDATE_URL)) {
+            $folio = strtoupper(trim((string) basename(parse_url($rawQr, PHP_URL_PATH))));
+        }
+
+        $folio = preg_replace('/^QR\s*[:#-]?\s*/i', '', $folio);
+
+        $order = ShipmentOrder::with(['client', 'items.product', 'loadingOrders'])
+            ->where(function ($query) use ($folio) {
+                $query->whereRaw('UPPER(folio) = ?', [$folio])
+                    ->orWhereRaw('UPPER(qr_code) = ?', [$folio]);
+            })
+            ->first();
+
+        // Fallback for keyboard-wedge scanners that mistype separators (e.g. "'" instead of "-")
+        // due to a keyboard-layout mismatch: compare folio/qr_code ignoring non-alphanumeric chars.
+        if (!$order) {
+            $normalizedFolio = preg_replace('/[^A-Z0-9]/', '', $folio);
+
+            if ($normalizedFolio !== '') {
+                $stripNonAlnum = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(%s), '-', ''), '_', ''), ' ', ''), '.', ''), \"'\", ''), '/', '')";
+
+                $order = ShipmentOrder::with(['client', 'items.product', 'loadingOrders'])
+                    ->where(function ($query) use ($stripNonAlnum, $normalizedFolio) {
+                        $query->whereRaw(sprintf($stripNonAlnum, 'folio') . ' = ?', [$normalizedFolio])
+                            ->orWhereRaw(sprintf($stripNonAlnum, 'qr_code') . ' = ?', [$normalizedFolio]);
+                    })
+                    ->first();
+            }
+        }
+
+        if (!$order) {
+            return response()->json(['error' => "Orden de embarque no encontrada: {$folio}"], 404);
+        }
+
+        if ($order->lot_id) {
+            return response()->json([
+                'error' => "La orden de embarque {$order->folio} ya está registrada en el historial.",
+            ], 409);
+        }
+
+        $hasCompletedWeighing = WeightTicket::where('shipment_order_id', $order->id)
+            ->where('weighing_status', '!=', 'cancelled')
+            ->whereNotNull('weigh_in_at')
+            ->exists()
+            || $order->loadingOrders()
+                ->whereHas('weight_ticket', function ($query) {
+                    $query->where('weighing_status', '!=', 'cancelled')
+                        ->whereNotNull('weigh_in_at');
+                })
+                ->exists();
+
+        if (!$hasCompletedWeighing) {
+            return response()->json([
+                'error' => "La unidad debe pasar a Bascula antes de continuar con la orden {$order->folio}.",
+                'blocked' => true,
+            ], 409);
+        }
+
+        return response()->json([
+            'order' => [
+                'id' => $order->id,
+                'folio' => $order->folio,
+                'operator_name' => $order->operator_name,
+                'tractor_plate' => $order->tractor_plate,
+                'trailer_plate' => $order->trailer_plate,
+                'client' => $order->client?->business_name ?? $order->client?->name,
+                'product' => $order->product ?? $order->items->first()?->product?->name,
+                'warehouse' => $order->warehouse
+                    ?: $order->loadingOrders->firstWhere('warehouse', '!=', null)?->warehouse,
+            ],
+        ]);
+    }
+
+    public function saveLoading(Request $request)
+    {
+        $this->ensureLoadingAssistantTables();
+        $validated = $request->validate([
+            'shipment_order_id' => 'required|exists:shipment_orders,id',
+            'lot_id' => 'required|exists:lots,id',
+            'warehouse' => 'required|string|max:255',
+            'squad_leader' => 'nullable|string|max:255',
+            'loading_assistant' => 'nullable|string|max:255',
+            'loaded_at' => 'nullable|date',
+        ]);
+
+        if ($validated['squad_leader'] && !$this->personalAgroindustrySquadLeaders()
+            ->contains(fn (string $name) => mb_strtoupper($name, 'UTF-8') === mb_strtoupper($validated['squad_leader'], 'UTF-8'))) {
+            return response()->json([
+                'message' => 'Selecciona un encargado de cuadrilla registrado en Gestión de Prestadores de Servicio.',
+                'errors' => ['squad_leader' => ['El encargado debe estar registrado como Líder de Cuadrilla Responsable de Personal Propio Agroindustria.']],
+            ], 422);
+        }
+
+        $order = ShipmentOrder::findOrFail($validated['shipment_order_id']);
+
+        $hasCompletedWeighing = WeightTicket::where('shipment_order_id', $order->id)
+            ->where('weighing_status', '!=', 'cancelled')
+            ->whereNotNull('weigh_in_at')
+            ->exists()
+            || $order->loadingOrders()
+                ->whereHas('weight_ticket', function ($query) {
+                    $query->where('weighing_status', '!=', 'cancelled')
+                        ->whereNotNull('weigh_in_at');
+                })
+                ->exists();
+
+        if (!$hasCompletedWeighing) {
+            return response()->json([
+                'message' => "La unidad debe pasar a Bascula antes de continuar con la orden {$order->folio}.",
+            ], 422);
+        }
+
+        $administrator = $request->user()?->name ?: $request->user()?->username ?: 'Administrador';
+
+        $order->update([
+            'lot_id' => $validated['lot_id'],
+            'warehouse' => $validated['warehouse'],
+            'loading_administrator' => $administrator,
+            'loading_squad_leader' => $validated['squad_leader'] ?? null,
+            'loading_assistant' => $validated['loading_assistant'] ?? null,
+            'loaded_at' => now(),
+            'status' => 'loading',
+        ]);
+
+        return response()->json([
+            'message' => 'Embarque guardado correctamente.',
+            'administrator' => $administrator,
+        ]);
+    }
+
+    public function loadingHistory(Request $request)
+    {
+        $lotId = $request->query('lot_id');
+
+        return response()->json($this->getLoadingHistory($lotId));
+    }
+
+    public function finishLoading(string $id)
+    {
+        $order = ShipmentOrder::whereNotNull('lot_id')->findOrFail($id);
+        $order->update([
+            'status' => 'loading',
+            'loading_finished_at' => now(),
+        ]);
+
+        return response()->json([
+            'message' => 'Orden de embarque finalizada correctamente.',
+            'item' => $this->formatLoadingHistoryItem($order->fresh(['items.product'])),
+        ]);
+    }
+
+    public function deleteLoading(string $id)
+    {
+        $order = ShipmentOrder::whereNotNull('lot_id')->findOrFail($id);
+        $order->update([
+            'lot_id' => null,
+            'warehouse' => null,
+            'loading_administrator' => null,
+            'loading_squad_leader' => null,
+            'loading_assistant' => null,
+            'loaded_at' => null,
+            'loading_finished_at' => null,
+            'status' => 'created',
+        ]);
+
+        $order->refresh();
+
+        return response()->json(['message' => 'Registro eliminado del historial.']);
+    }
+
+    private function getLoadingHistory(?string $lotId = null)
+    {
+        $query = ShipmentOrder::with(['items.product'])
+            ->whereNotNull('lot_id');
+
+        if ($lotId) {
+            $query->where('lot_id', $lotId);
+        }
+
+        return $query->orderByDesc('loaded_at')
+            ->get()
+            ->map(fn (ShipmentOrder $order) => $this->formatLoadingHistoryItem($order))
+            ->values();
+    }
+
+    private function formatLoadingHistoryItem(ShipmentOrder $order): array
+    {
+        return [
+            'id' => $order->id,
+            'lot_id' => $order->lot_id,
+            'folio' => $order->folio,
+            'operator' => $order->operator_name ?? 'N/A',
+            'squad_leader' => $order->loading_squad_leader ?? 'N/A',
+            'product' => $order->product ?? $order->items->first()?->product?->name ?? 'N/A',
+            'plates' => collect([$order->tractor_plate, $order->trailer_plate])->filter()->implode(' / ') ?: 'N/A',
+            'started_at' => $order->loaded_at?->toIso8601String(),
+            'finished_at' => $order->loading_finished_at?->toIso8601String(),
+            'status' => $order->status,
+        ];
+    }
+
+    public function shipmentProcessIndex(Request $request)
+    {
+        $this->ensureLoadingAssistantTables();
+
+        $lots = Lot::orderBy('created_at', 'desc')->get(['id', 'folio', 'plant_origin', 'warehouse']);
+        $squadLeaders = $this->personalAgroindustrySquadLeaders();
+        $assistants = LoadingAssistant::orderBy('name')->get(['id', 'name']);
+        $history = $this->getLoadingHistory();
+
+        return Inertia::render('APT/ShipmentProcess', [
+            'lots' => $lots,
+            'squad_leaders' => $squadLeaders,
+            'assistants' => $assistants,
+            'initial_history' => $history,
+        ]);
+    }
+
+    private function personalAgroindustrySquadLeaders()
+    {
+        $leaders = AptAttendance::query()
+            ->where(function ($query) {
+                $query->whereRaw('UPPER(service_provider) LIKE ?', ['%PERSONAL PROPIO%'])
+                    ->orWhereRaw('UPPER(service_provider) LIKE ?', ['%AGROINDUSTRIA%']);
+            })
+            ->get(['squad_leader'])
+            ->flatMap(function (AptAttendance $attendance) {
+                $leader = is_array($attendance->squad_leader) ? ($attendance->squad_leader[0]['name'] ?? '') : '';
+                return trim((string) $leader) !== '' ? [trim((string) $leader)] : [];
+            })
+            ->unique(fn (string $name) => mb_strtoupper($name, 'UTF-8'))
+            ->sort()
+            ->values();
+
+        if ($leaders->isEmpty()) {
+            $leaders = AptAttendance::query()
+                ->get(['squad_leader'])
+                ->flatMap(function (AptAttendance $attendance) {
+                    $leader = is_array($attendance->squad_leader) ? ($attendance->squad_leader[0]['name'] ?? '') : '';
+                    return trim((string) $leader) !== '' ? [trim((string) $leader)] : [];
+                })
+                ->unique(fn (string $name) => mb_strtoupper($name, 'UTF-8'))
+                ->sort()
+                ->values();
+        }
+
+        return $leaders;
+    }
+
+    private function ensureLoadingAssistantTables(): void
+    {
+        if (!Schema::hasTable('loading_assistants')) {
+            Schema::create('loading_assistants', function (Blueprint $table) {
+                $table->id();
+                $table->string('name')->unique();
+                $table->timestamps();
+            });
+        }
+
+        if (!Schema::hasColumn('shipment_orders', 'loading_assistant')) {
+            Schema::table('shipment_orders', function (Blueprint $table) {
+                $table->string('loading_assistant')->nullable()->after('loading_squad_leader');
+            });
+        }
     }
 
     /**
