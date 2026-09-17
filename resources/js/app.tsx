@@ -1,10 +1,23 @@
 import '../css/app.css';
 import './bootstrap';
 
-import { createInertiaApp } from '@inertiajs/react';
+import { createInertiaApp, router } from '@inertiajs/react';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import { createRoot } from 'react-dom/client';
 import { ScaleProvider } from './Contexts/ScaleContext';
+
+router.on('navigate', (event) => {
+    const page = event.detail.page as any;
+    if (page?.props?.csrf_token) {
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        if (meta) {
+            meta.setAttribute('content', page.props.csrf_token);
+        }
+        if (window.axios?.defaults?.headers?.common) {
+            window.axios.defaults.headers.common['X-CSRF-TOKEN'] = page.props.csrf_token;
+        }
+    }
+});
 // import { registerSW } from 'virtual:pwa-register';
 
 // Register PWA Service Worker

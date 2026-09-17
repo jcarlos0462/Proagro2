@@ -15,16 +15,23 @@ export default function Login({
     canResetPassword: boolean;
     tenant: any;
 }) {
-    const { data, setData, post, processing, errors, reset } = useForm({
+    const { data, setData, post, processing, errors, reset, transform } = useForm({
         username: "",
         password: "",
         remember: false,
+        _token: "",
     });
 
     const [showPassword, setShowPassword] = useState(false);
 
     const submit: FormEventHandler = (e) => {
         e.preventDefault();
+
+        const token = (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content;
+        transform((curr) => ({
+            ...curr,
+            _token: token || curr._token,
+        }));
 
         post(route("login"), {
             onFinish: () => reset("password"),

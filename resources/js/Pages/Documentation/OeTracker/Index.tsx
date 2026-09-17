@@ -141,7 +141,7 @@ function StatusBadge({ row }: { row: OeRow }) {
         const colorClasses: Record<string, string> = {
             red: "bg-red-50 text-red-700 border-red-200",
             amber: "bg-amber-50 text-amber-800 border-amber-200",
-            indigo: "bg-indigo-50 text-indigo-700 border-indigo-200",
+            indigo: "bg-orange-50 text-orange-700 border-orange-200",
             blue: "bg-blue-50 text-blue-700 border-blue-200",
             emerald: "bg-emerald-50 text-emerald-800 border-emerald-200",
         };
@@ -541,7 +541,7 @@ export default function OeTrackerIndex({
                                         ? route('apt.index')
                                         : route('documentation.index')
                         }
-                        className="text-gray-500 hover:text-indigo-700 inline-flex items-center text-xs sm:text-sm font-medium transition-colors"
+                        className="text-gray-500 hover:text-indigo-700 inline-flex items-center text-xs sm:text-sm font-bold transition-colors"
                     >
                         <ArrowLeft className="w-3.5 h-3.5 mr-1" />
                         {
