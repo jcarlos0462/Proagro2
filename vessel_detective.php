@@ -1,12 +1,10 @@
 <?php
-$env = parse_ini_file(__DIR__ . '/.env');
-$host = $env['DB_HOST'] ?? '127.0.0.1';
-$user = $env['DB_USERNAME'] ?? '';
-$pass = $env['DB_PASSWORD'] ?? '';
-$db = $env['DB_DATABASE'] ?? '';
+$user = "root";
+$pass = "";
+$db = "vecode";
 
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass, [
+    $pdo = new PDO("mysql:host=127.0.0.1;dbname=$db;charset=utf8mb4", $user, $pass, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
     ]);
 } catch (Exception $e) {

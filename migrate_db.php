@@ -19,9 +19,9 @@ function parseEnv($path) {
     return $env;
 }
 
-$currentEnv = parseEnv(__DIR__ . '/.env');
-$targetDb = $currentEnv['DB_DATABASE'] ?? 'u174025152_vecode_v3';
-$targetUser = $currentEnv['DB_USERNAME'] ?? 'u174025152_Vecode_2026';
+$currentEnv = parseEnv(__DIR__ . '/../../.env');
+$targetDb = $currentEnv['DB_DATABASE'] ?? 'u174025152_vecode';
+$targetUser = $currentEnv['DB_USERNAME'] ?? 'u174025152_vecode_';
 // We will ask for this manually to avoid parsing validation issues
 $targetPassAuto = $currentEnv['DB_PASSWORD'] ?? ''; 
 $host = $currentEnv['DB_HOST'] ?? '127.0.0.1';
