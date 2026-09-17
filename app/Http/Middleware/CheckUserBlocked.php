@@ -17,7 +17,14 @@ class CheckUserBlocked
      */
     public function handle(Request $request, Closure $next): Response
     {
-        if (Auth::check() && Auth::user()->is_blocked) {
+        try {
+            $blocked = Auth::check() && Auth::user()->is_blocked;
+        } catch (\Throwable $exception) {
+            report($exception);
+            $blocked = false;
+        }
+
+        if ($blocked) {
             Auth::logout();
             $request->session()->invalidate();
             $request->session()->regenerateToken();
